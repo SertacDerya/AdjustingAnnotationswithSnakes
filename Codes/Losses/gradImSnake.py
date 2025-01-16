@@ -3,6 +3,7 @@ from functools import reduce
 import torch as th
 
 from .snake import Snake
+from .ribbon_snake import Ribbon_Snake
 
 # Gaussian gradient for snakes
 
@@ -49,6 +50,7 @@ def cmptGradIm(img,fltr):
     # fltr is either 2D: 2 X 1 X k X k
     #             or 3D: 3 X 1 X k X k X k
     #      it is a torch tensor
+    # creates 
     
     if img.dim()==4:
         img_p=th.nn.ReplicationPad2d(fltr.shape[2]//2).forward(img)
@@ -88,7 +90,7 @@ def cmptExtGrad(snakepos,eGradIm):
         
     return egrad.reshape_as(snakepos)
 
-class GradImSnake(Snake):
+class GradImSnake(Ribbon_Snake):
     # a snake with external energy gradients sampled from a "gradient image"
     
     def __init__(self,graph,crop,stepsz,alpha,beta,ndims,gimg):
@@ -98,6 +100,7 @@ class GradImSnake(Snake):
         # with respect to the i-th coordinate of a control point located at (h,w)
         super(GradImSnake,self).__init__(graph,crop,stepsz,alpha,beta,ndims)
         self.gimg=gimg
+        self.iscuda=False
     
     def cuda(self):
         super(GradImSnake,self).cuda()
