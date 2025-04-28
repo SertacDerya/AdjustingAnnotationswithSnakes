@@ -179,7 +179,8 @@ class UNet(nn.Module):
 
             # === Last ===
             x = self.last_layer(x)
-            x = F.relu(x)
+            # removed relu for negative preds
+            #x = F.relu(x)
 
         except Exception as e:
             for i,dim in enumerate(input.shape[2:]):
