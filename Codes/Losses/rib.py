@@ -85,79 +85,89 @@ class RibbonSnake(Snake):
         
     def comp_second_deriv(self):
         """
-        1D second-derivative smoothing for widths via convolution.
+        Computes an internal smoothness term for widths, related to the second derivative,
+        using 1D convolution. Handles boundaries using padding.
+        A positive value indicates the width should shrink to increase smoothness,
+        a negative value indicates it should grow.
+        Returns:
+            torch.Tensor: Smoothness term for each node, shape (K, 1).
         """
+        K = self.w.numel()
+        if K < 3:
+             return torch.zeros(K, 1, device=self.w.device, dtype=self.w.dtype)
+
         w = self.w.view(1, 1, -1)
-        kernel = torch.tensor([1.0, -4.0, 6.0, -4.0, 1.0], device=w.device).view(1,1,5)
-        grad_norm = F.conv1d(w, kernel, padding=2)
-        return grad_norm.view(-1,1)
-    
+
+        kernel = torch.tensor([[[1.0, -2.0, 1.0]]], device=w.device, dtype=w.dtype) # Shape (1, 1, 3)
+        padding_size = (kernel.shape[-1] - 1) // 2
+        w_padded = F.pad(w, (padding_size, padding_size), mode='replicate')
+        smoothness_term = F.conv1d(w_padded, kernel, padding=0)
+        return -smoothness_term.view(-1, 1) # Shape (K, 1)
+
     def step_widths(self, gimgW):
         """
         Update widths by sampling gradient of image W at ribbon edges and
         adding internal smoothness via second derivative.
+        Handles leaf nodes using padded convolution for smoothness.
         """
         if self.s.numel() == 0:
             return self.w
 
-        pos = self.s                  # (N, d)
+        pos = self.s                  # (K, d) tensor of center points
         K, d = pos.shape
         device = pos.device
-        half_r = self.w * 0.5 # N
+        w_vec = self.w.view(-1)       # Ensure w is a vector (K,)
+        half_r = (w_vec / 2.0).view(K, 1) # Shape (K, 1) for broadcasting
 
         if d == 2:
             (normals,) = self._compute_normals(pos)
-            left_pts  = pos - normals * half_r.unsqueeze(1)
-            right_pts = pos + normals * half_r.unsqueeze(1)
-
+            left_pts  = pos - normals * half_r    
+            right_pts = pos + normals * half_r    
             grad_L = cmptExtGrad(left_pts,  gimgW)
             grad_R = cmptExtGrad(right_pts, gimgW)
-            # radial derivative
-            grad_w = ((grad_R - grad_L) * normals).sum(dim=1, keepdim=True)
+            grad_w = ((grad_R - grad_L) * normals).sum(dim=1, keepdim=True) # (K, 1)
 
-        else:  # d == 3
-            n1, n2, _ = self._compute_normals(pos)   # each (K,3)
+        elif d == 3:
+            n1, n2, _ = self._compute_normals(pos)
+            N_samples = 8
+            theta = torch.linspace(0, 2*math.pi, N_samples + 1, device=device, dtype=pos.dtype)[:-1]
+            theta_exp = theta.view(N_samples, 1, 1)
+            n1_exp = n1.unsqueeze(0)                
+            n2_exp = n2.unsqueeze(0)                
+            half_r_exp = half_r.view(1, K, 1)       
+            pos_exp = pos.unsqueeze(0)              
+            dirs = theta_exp.cos() * n1_exp + theta_exp.sin() * n2_exp
+            epsilon_offset = 1e-4
+            pts_out = pos_exp + (half_r_exp + epsilon_offset) * dirs  
+            pts_in  = pos_exp - (half_r_exp + epsilon_offset) * dirs  
+            all_pts = torch.cat([pts_out, pts_in], dim=0) 
+            all_pts_flat = all_pts.view(-1, 3)           
+            grads_flat = cmptExtGrad(all_pts_flat, gimgW)
+            grads = grads_flat.view(2*N_samples, K, 3)   
+            grads_out = grads[:N_samples]
+            grads_in  = grads[N_samples:]
+            grad_diff = grads_out - grads_in
+            radial_component = (grad_diff * dirs).sum(dim=2)
+            grad_w = radial_component.mean(dim=0, keepdim=True).t()
 
-            N = 8
-            theta = torch.linspace(0, 2*math.pi, N, device=device, dtype=pos.dtype)[:-1]  # (N-1,)
-            dirs = (
-                theta.cos().unsqueeze(1).unsqueeze(2) * n1.unsqueeze(0) +
-                theta.sin().unsqueeze(1).unsqueeze(2) * n2.unsqueeze(0)
-            )  # (N-1, K, 3)
+        else:
+            raise ValueError(f"Unsupported dimension: {d}")
 
-            pts_out = pos.unsqueeze(0) + half_r.unsqueeze(0).unsqueeze(2) * dirs   # (N-1, K, 3)
-            pts_in = pos.unsqueeze(0) - half_r.unsqueeze(0).unsqueeze(2) * dirs   # (N-1, K, 3)
-            all_pts = torch.cat([pts_out, pts_in], dim=0) # (2(N-1), K, 3)
+        # --- Internal Smoothness Term ---
+        # internal points in the direction width should move to increase smoothness
+        internal = self.comp_second_deriv() # (K, 1)
 
-            grads = cmptExtGrad(all_pts.view(-1,3), gimgW)# (2(N-1)*K, 3)
-            grads = grads.view(2*(N-1), -1,3)
+        # --- Combine Terms and Update ---
+        # Adaptive alpha balances external gradient and internal smoothness
+        # Use max with a small value to prevent division by zero and instability
+        alpha = grad_w.abs() / (internal.abs().max(torch.tensor(1e-8, device=device))) # (K, 1)
+        # Optional: Clamp alpha to prevent extreme internal forces
+        alpha = torch.clamp(alpha, max=10.0)
+        total_gradient = -grad_w - alpha * internal
 
-            grad_diff = grads[:(N-1)] - grads[(N-1):] # (N-1, K, 3)
-            radial = (grad_diff * dirs).sum(dim=2) # (N-1, K)
-            grad_w = radial.mean(dim=0, keepdim=True).t() # (K,1)
-            norm_grad = self.comp_second_deriv() # (K,1)
-            w_flat    = self.w.view(-1) # (K,)
-            smooth    = torch.zeros_like(w_flat) # (K,)
-
-            if K > 1:
-                smooth[0]   = w_flat[0]   - w_flat[1]
-                smooth[-1]  = w_flat[-1]  - w_flat[-2]
-                if K > 2:
-                    smooth[1:-1] = 2*w_flat[1:-1] - w_flat[:-2] - w_flat[2:]
-
-            smooth = smooth.view(K,1) # (K,1)
-            internal = norm_grad + smooth # (K,1)
-            alpha = grad_w.abs() / (internal.abs() + 1e-8)
-            total = grad_w + alpha * internal # (K,1)
-            self.w = self.w - self.stepsz * total.squeeze(1)
-            return self.w
-
-        # internal smoothness
-        internal = self.comp_second_deriv()
-        alpha = grad_w.abs() / (internal.abs() + 1e-8)
-        total = (grad_w + alpha * internal).squeeze(1)
-        # gradient step
-        self.w = self.w - self.stepsz * total
+        # gradient descent step: w_new = w_old - stepsz * total_gradient
+        self.w = w_vec + self.stepsz * total_gradient.squeeze(-1)
+        self.w = torch.clamp(self.w, min=1e-4)
         return self.w
     
     def render_distance_map_with_widths(self, size, max_dist=16.0):
