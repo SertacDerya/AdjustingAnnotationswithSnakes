@@ -160,58 +160,100 @@ class RibbonSnake(Snake):
         self.w = self.w - self.stepsz * total
         return self.w
     
-    def render_distance_map_with_widths(self, size):
+    def render_distance_map_with_widths(self, size, max_dist=16.0):
         """
-        Unified 2D/3D signed distance map for the ribbon snake.
+        Unified 2D/3D signed distance map for the ribbon snake using graph structure.
 
         Args:
             size (tuple): (W, H) for 2D or (X, Y, Z) for 3D grid dimensions.
+            max_dist (float): Maximum distance value to clamp to.
 
         Returns:
-            torch.Tensor: Signed distance map of shape `size`, where negative values indicate points inside the ribbon and positive values the distance to the nearest edge.
+            torch.Tensor: Signed distance map of shape `size`. Negative inside,
+                          zero on surface, positive outside up to max_dist.
         """
         device = self.s.device
         centers = self.s
-        radii   = (self.w.flatten() / 2)
-        axes    = [torch.arange(sz, device=device, dtype=torch.float32) for sz in size]
-        mesh    = torch.meshgrid(*axes, indexing='ij')
-        points  = torch.stack([m.flatten() for m in mesh], dim=1)
-        if len(centers) == 0:
-            # Return a distance map filled with maximum distance
-            return torch.full(size, 16.0, device=device)
-        # capsule sides
-        if centers.shape[0] > 1:
-            starts, ends = centers[:-1], centers[1:]
-            r0, r1 = radii[:-1], radii[1:]
+        radii = (self.w.flatten() / 2.0)
+        eps = 1e-8
+
+        if centers.numel() == 0 or radii.numel() == 0 or len(self.h.nodes) == 0:
+            print("Warning: Rendering distance map for empty snake.")
+            return torch.full(size, max_dist, device=device, dtype=centers.dtype)
+
+        if centers.shape[0] != radii.shape[0]:
+             raise ValueError(f"Mismatch between center points ({centers.shape[0]}) and radii ({radii.shape[0]})")
+
+        axes = [torch.arange(sz, device=device, dtype=torch.float32) for sz in size]
+        mesh = torch.meshgrid(*axes, indexing='ij')
+        points = torch.stack([m.flatten() for m in mesh], dim=1)
+        num_points = points.shape[0]
+        min_dist = torch.full((num_points,), float('inf'), device=device, dtype=centers.dtype)
+
+        if len(self.h.edges) > 0:
+            try:
+                if hasattr(self, 'n2i') and self.n2i:
+                     edge_indices_list = [(self.n2i[u], self.n2i[v]) for u, v in self.h.edges]
+                else:
+                     edge_indices_list = list(self.h.edges)
+
+                edge_indices = torch.tensor(edge_indices_list, device=device, dtype=torch.long) # (E, 2)
+            except KeyError as e:
+                 raise RuntimeError(f"Node ID {e} from graph edges not found in n2i mapping. Ensure Snake init populated n2i correctly.") from e
+            except Exception as e:
+                 raise RuntimeError(f"Error processing graph edges. Ensure self.h and self.n2i are correct. Original error: {e}")
+
+
+            starts = centers[edge_indices[:, 0]]
+            ends   = centers[edge_indices[:, 1]]
+            r0     = radii[edge_indices[:, 0]]
+            r1     = radii[edge_indices[:, 1]]
+
             vec = ends - starts
-            L   = vec.norm(dim=1, keepdim=True)
-            D   = vec / (L + 1e-8)
+            L_sq = (vec**2).sum(dim=1)
+            valid_edge = L_sq > eps**2
+            if not torch.any(valid_edge):
+                 print("Warning: All edges have zero length in render_distance_map.")
+            else:
+                 starts_v, ends_v = starts[valid_edge], ends[valid_edge]
+                 r0_v, r1_v = r0[valid_edge], r1[valid_edge]
+                 vec_v = vec[valid_edge]
+                 L_sq_v = L_sq[valid_edge]
+                 L_v = torch.sqrt(L_sq_v)
+                 D_v = vec_v / (L_v.unsqueeze(1) + eps)
 
-            P = points.unsqueeze(1)
-            S = starts.unsqueeze(0)
-            D = D.unsqueeze(0)
-            L = L.unsqueeze(0).squeeze(-1)
+                 P_exp = points.unsqueeze(1)
+                 S_exp = starts_v.unsqueeze(0)
+                 D_exp = D_v.unsqueeze(0)
+                 L_exp = L_v.unsqueeze(0)
 
-            v    = P - S
-            proj = (v * D).sum(dim=2)
-            # clamp proj to [0, L]
-            low  = proj.clamp(min=0.0)
-            t    = torch.min(low, L)
+                 v_point_start = P_exp - S_exp
+                 proj = (v_point_start * D_exp).sum(dim=2)
+                 t = torch.clamp(proj, min=torch.tensor(0.0), max=L_exp)
 
-            closest       = S + D * t.unsqueeze(-1)
-            dist_axis     = (P - closest).norm(dim=2)
-            frac          = t / (L + 1e-8)
-            interp_radius = r0 * (1-frac) + r1 * frac
-            dist_capsule, _ = (dist_axis - interp_radius).min(dim=1)
-        else:
-            dist_capsule = torch.full((points.shape[0],), float('inf'), device=device)
+                 closest_on_axis = S_exp + D_exp * t.unsqueeze(-1)
+                 dist_axis_sq = ((P_exp - closest_on_axis)**2).sum(dim=2)
+                 frac = t / torch.clamp(L_exp, min=eps)
+                 r0_exp = r0_v.unsqueeze(0)
+                 r1_exp = r1_v.unsqueeze(0)
+                 interp_radius = r0_exp * (1.0 - frac) + r1_exp * frac
+                 dist_sq_capsule = dist_axis_sq - interp_radius**2
+                 dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=0.0))
+                 signed_dist_capsule = dist_axis - interp_radius
+                 min_dist_capsule, _ = signed_dist_capsule.min(dim=1)
 
-        # end caps
-        start_c = centers[0]; end_c = centers[-1]
-        dist_start = (points - start_c).norm(dim=1) - radii[0]
-        dist_end   = (points - end_c).norm(dim=1)   - radii[-1]
+                 min_dist = torch.minimum(min_dist, min_dist_capsule)
 
-        dist = torch.min(dist_capsule, dist_start)
-        dist = torch.min(dist, dist_end)
-        #dist.requires_grad_(True)
-        return torch.clamp(dist.reshape(*size), max=16)
+        if centers.shape[0] > 0:
+            P_exp = points.unsqueeze(1)
+            C_exp = centers.unsqueeze(0)
+            R_exp = radii.unsqueeze(0)
+            dist_to_centers_sq = ((P_exp - C_exp)**2).sum(dim=2)
+            dist_to_centers = torch.sqrt(torch.clamp(dist_to_centers_sq, min=0.0))
+
+            signed_dist_sphere = dist_to_centers - R_exp
+            min_dist_sphere, _ = signed_dist_sphere.min(dim=1)
+            min_dist = torch.minimum(min_dist, min_dist_sphere)
+
+        dist_clamped = torch.clamp(min_dist, max=max_dist)
+        return dist_clamped.reshape(*size)
