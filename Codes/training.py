@@ -170,7 +170,7 @@ class Validation(object):
                                             lambda chunk: network(chunk),
                                             self.crop_size, self.margin_size)
                 # apply the mask again
-                binary_mask = (mask == 0).float() 
+                binary_mask = (mask == 0).float()
                 pred = pred * binary_mask
 
                 loss = loss_function(pred, label)

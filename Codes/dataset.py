@@ -4,7 +4,7 @@ import torchvision.transforms as transforms
 import numpy as np
 from .augmentations import crop
 from .utils import load_graph_txt, to_torch
-from Losses.cropGraph import cropGraph_dontCutEdges
+from .Losses.cropGraph import cropGraph_dontCutEdges
 from PIL import Image
 import os
 
