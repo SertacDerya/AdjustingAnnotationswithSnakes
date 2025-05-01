@@ -4,6 +4,7 @@ import torchvision.transforms as transforms
 import numpy as np
 from .augmentations import crop
 from .utils import load_graph_txt, to_torch
+from Losses.cropGraph import cropGraph_dontCutEdges
 from PIL import Image
 import os
 
@@ -54,6 +55,15 @@ class DRIVEDataset(Dataset):
         
         if self.train:
             image, label, mask, slices = crop([image, label, mask], self.cropSize)
+            cropped_graph_view = cropGraph_dontCutEdges(graph, slices)
+            cropped_graph = cropped_graph_view.copy()
+
+            offset = np.array([s.start for s in slices])
+            for n in cropped_graph.nodes:
+                if 'pos' in cropped_graph.nodes[n]:
+                    cropped_graph.nodes[n]['pos'] = cropped_graph.nodes[n]['pos'] - offset
+            
+            graph = cropped_graph
             
         label[label>self.th] = self.th
         
