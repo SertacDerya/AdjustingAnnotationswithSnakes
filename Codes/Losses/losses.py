@@ -87,12 +87,7 @@ class SnakeFastLoss(nn.Module):
             g = lg[1]  # gradient image
             gw = lg[2]
 
-            if crops:
-                crop = crops[i]
-            else:
-                crop = [slice(0, s) for s in g.shape[1:]]
-
-            s = GradImRib(graph=l, crop=crop, stepsz=self.stepsz, alpha=self.alpha,
+            s = GradImRib(graph=l, crop=None, stepsz=self.stepsz, alpha=self.alpha,
                         beta=self.beta,dim=self.ndims, gimgV=g, gimgW=gw)
                     
             if self.iscuda: 
@@ -100,13 +95,6 @@ class SnakeFastLoss(nn.Module):
 
             s.optim(self.nsteps)
             dmap = s.render_distance_map_with_widths(g[0].shape)
-            if dmap.shape != output_size:
-                dmap = torch.nn.functional.interpolate(
-                    dmap.unsqueeze(0).unsqueeze(0),
-                    size=output_size,
-                    mode='nearest'
-                ).squeeze(0).squeeze(0)
-                
             dmap = dmap.to(device)
             snake_dmap.append(dmap)
 
