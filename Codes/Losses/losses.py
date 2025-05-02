@@ -70,15 +70,11 @@ class SnakeFastLoss(nn.Module):
 
         pred_ = pred_dmap
         dmapW = torch.abs(pred_).clone()
-        gimgW = cmptGradIm(dmapW.detach(), self.fltrt)
-        gimg = cmptGradIm(pred_.detach(), self.fltrt)
+        gimgW = cmptGradIm(dmapW, self.fltrt)
+        gimg = cmptGradIm(pred_, self.fltrt)
         gimg *= self.extgradfac
         gimgW *= self.extgradfac
         snake_dmap = []
-
-        # Get the output dimensions from pred_dmap
-        output_size = pred_dmap.shape[2:]
-        device = pred_dmap.device
 
         for i, lg in enumerate(zip(lbl_graphs, gimg, gimgW)):
             # i is index num
@@ -95,11 +91,9 @@ class SnakeFastLoss(nn.Module):
 
             s.optim(self.nsteps)
             dmap = s.render_distance_map_with_widths(g[0].shape)
-            dmap = dmap.to(device)
             snake_dmap.append(dmap)
 
         snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1)   
-        snake_dm = snake_dm.to(device)     
         loss = ((pred_dmap - snake_dm)**2).mean()
         self.snake = s
         return loss
@@ -121,8 +115,8 @@ class SnakeSimpleLoss(nn.Module):
         self.extgradfac=extgradfac
         self.nsteps=nsteps
 
-        self.fltr =gradImSnake.makeGaussEdgeFltr(self.fltrstdev,self.ndims)
-        self.fltrt=torch.from_numpy(self.fltr).type(torch.float32)
+        self.fltr = makeGaussEdgeFltr(self.fltrstdev, self.ndims)
+        self.fltrt = torch.from_numpy(self.fltr).type(torch.float32)
 
         self.iscuda=False
 
@@ -135,33 +129,29 @@ class SnakeSimpleLoss(nn.Module):
     def forward(self,pred_dmap,lbl_graphs,crops=None):
     
         pred_=pred_dmap.detach()
-        gimg=gradImSnake.cmptGradIm(pred_,self.fltrt)
-        gimg*=self.extgradfac
-        snake_dmap=[]
+        
+        dmapW = torch.abs(pred_).clone()
+        gimgW = cmptGradIm(dmapW.detach(), self.fltrt)
+        gimg = cmptGradIm(pred_.detach(), self.fltrt)
+        gimg *= self.extgradfac
+        gimgW *= self.extgradfac
+        snake_dmap = []
 
-        for i,lg in enumerate(zip(lbl_graphs,gimg)):
+        for i,lg in enumerate(zip(lbl_graphs,gimg, gimgW)):
             l = lg[0]
             g = lg[1]
-            if crops:
-                crop = crops[i]
-            else:
-                crop=[slice(0,s) for s in g.shape[1:]]
-            s=gradImSnake.GradImSnake(l,crop,self.stepsz,self.alpha,
-                                      self.beta,self.ndims,g)
-            if self.iscuda: s.cuda()
+            gw = lg[2]
+
+            s = GradImRib(graph=l, crop=None, stepsz=self.stepsz, alpha=self.alpha,
+                        beta=self.beta,dim=self.ndims, gimgV=g, gimgW=gw)
+            
+            if self.iscuda: 
+                s.cuda()
 
             s.optim(self.nsteps)
 
-            lbl = np.zeros(g.shape[1:])
-            lbl = s.renderSnakeWithLines(lbl)
-            if np.sum(lbl) == 0:
-                dmap = self.dmax * np.ones(lbl.shape)
-            else:
-                # the distance map is calculated here from the probability map
-                dmap = dist(1-lbl)
-                dmap[dmap > self.dmax] = self.dmax
-                
-            snake_dmap.append(torch.Tensor(dmap).type(torch.float32).cuda())
+            dmap = s.render_distance_map_with_widths(g[0].shape)
+            snake_dmap.append(dmap)
 
         snake_dm=torch.stack(snake_dmap,0).unsqueeze(1)
         loss=torch.pow(pred_dmap-snake_dm,2).mean()

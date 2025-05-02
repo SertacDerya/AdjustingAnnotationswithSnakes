@@ -39,7 +39,7 @@ class RibbonSnake(Snake):
         super().__init__(graph, crop, stepsz, alpha, beta, dim)
         # Additionally we sample from a normal distrubution for widths of nodes
         #self.w = torch.randn(self.s.shape[0]).abs()
-        self.w = torch.ones(self.s.shape[0])
+        self.w = torch.randint(low=2, high=9, size=(self.s.shape[0],), dtype=torch.float32)
 
     def cuda(self):
         super().cuda()
@@ -227,9 +227,7 @@ class RibbonSnake(Snake):
             vec = ends - starts
             L_sq = (vec**2).sum(dim=1)
             valid_edge = L_sq > eps**2
-            if not torch.any(valid_edge):
-                 print("Warning: All edges have zero length in render_distance_map.")
-            else:
+            if torch.any(valid_edge):
                  starts_v, ends_v = starts[valid_edge], ends[valid_edge]
                  r0_v, r1_v = r0[valid_edge], r1[valid_edge]
                  vec_v = vec[valid_edge]
