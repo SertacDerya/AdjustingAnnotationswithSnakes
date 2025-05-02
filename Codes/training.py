@@ -109,7 +109,7 @@ class TrainingEpoch(object):
             
             if self.ours and iterations >= self.ours_start:
             # calls forward on loss here, and snake is adjusted
-                loss = our_loss(preds, graphs, slices, masks)
+                loss = our_loss(preds, graphs, slices, masks, iterations)
             else:
                 loss = base_loss(preds, labels)
                 

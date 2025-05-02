@@ -38,8 +38,8 @@ class MAELoss(nn.Module):
         return loss.mean()
 
 class SnakeFastLoss(nn.Module):
-    def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps,
-                 cropsz, dmax, maxedgelen, extgradfac):
+    def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps, nsteps_width,
+                 cropsz, dmax, maxedgelen, extgradfac, slow_start):
         super(SnakeFastLoss, self).__init__()
         self.stepsz = stepsz
         self.alpha = alpha
@@ -51,6 +51,8 @@ class SnakeFastLoss(nn.Module):
         self.maxedgelen = maxedgelen
         self.extgradfac = extgradfac
         self.nsteps = nsteps
+        self.nsteps_width = nsteps_width
+        self.slow_start = slow_start
 
         self.fltr = makeGaussEdgeFltr(self.fltrstdev, self.ndims)
         self.fltrt = torch.from_numpy(self.fltr).type(torch.float32)
@@ -63,7 +65,7 @@ class SnakeFastLoss(nn.Module):
         self.iscuda = True
         return self
 
-    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None):
+    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=0):
         # pred_dmap is the predicted distance map from the UNet
         # lbl_graphs contains graphs each represent a label as a snake
         # crops is a list of slices, each represents the crop area of the corresponding snake
@@ -88,8 +90,9 @@ class SnakeFastLoss(nn.Module):
                     
             if self.iscuda: 
                 s.cuda()
+            if self.slow_start > epoch:
+                s.optim(self.nsteps, self.nsteps_width)
 
-            s.optim(self.nsteps)
             dmap = s.render_distance_map_with_widths(g[0].shape)
             if mask is not None:
                 dmap = dmap * (mask==0)

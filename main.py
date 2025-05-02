@@ -88,14 +88,16 @@ def main(config_file="main.config"):
         fltrstdev = __c__["fltrstdev"]
         extparam = __c__["extparam"]
         nsteps = __c__["nsteps"]
+        nsteps_width = __c__["nsteps_width"]
         ndims = __c__["ndims"]
         cropsz = __c__["cropsz"]
         dmax = __c__["dmax"]
         maxedgelength = __c__["maxedgelength"]
         extgradfac = __c__["extgradfac"]
+        slow_start = __c__["slow_start"]
         
-        our_loss = SnakeFastLoss(stepsz,alpha,beta,fltrstdev,ndims,nsteps,
-                                              cropsz,dmax,maxedgelength,extgradfac).cuda()
+        our_loss = SnakeFastLoss(stepsz,alpha,beta,fltrstdev,ndims,nsteps,nsteps_width,
+                                              cropsz,dmax,maxedgelength,extgradfac,slow_start).cuda()
     else:
         our_loss = None
 

@@ -106,11 +106,10 @@ class GradImRib(RibbonSnake):
     def step_widths(self):
         return super().step_widths(self.gimgW)
     
-    def optim(self, niter):
+    def optim(self, niter, niter_width):
         if len(self.s) > 0:
             for i in range(niter):
-                if i < niter / 2:
-                    self.step()
-                else:
-                    self.step_widths()
+                self.step()
+            for i in range(niter_width):
+                self.step_widths()
         return self.s
