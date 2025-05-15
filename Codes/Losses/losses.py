@@ -90,7 +90,7 @@ class SnakeFastLoss(nn.Module):
                     
             if self.iscuda: 
                 s.cuda()
-            if self.slow_start > epoch:
+            if self.slow_start < epoch:
                 s.optim(self.nsteps, self.nsteps_width)
 
             dmap = s.render_distance_map_with_widths(g[0].shape)
