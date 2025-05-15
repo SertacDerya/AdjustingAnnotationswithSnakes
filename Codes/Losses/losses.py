@@ -65,7 +65,7 @@ class SnakeFastLoss(nn.Module):
         self.iscuda = True
         return self
 
-    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=0):
+    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=float("inf")):
         # pred_dmap is the predicted distance map from the UNet
         # lbl_graphs contains graphs each represent a label as a snake
         # crops is a list of slices, each represents the crop area of the corresponding snake
