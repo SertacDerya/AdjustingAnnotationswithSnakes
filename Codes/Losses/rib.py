@@ -38,8 +38,8 @@ class RibbonSnake(Snake):
         # Normal initialization of Snake super class
         super().__init__(graph, crop, stepsz, alpha, beta, dim)
         # Additionally we sample from a normal distrubution for widths of nodes
-        #self.w = torch.randn(self.s.shape[0]).abs()
-        self.w = torch.randint(low=2, high=9, size=(self.s.shape[0],), dtype=torch.float32)
+        #self.w = torch.ones(self.s.shape[0]) * 8.0
+        self.w = torch.randint(low=2, high=10, size=(self.s.shape[0],), dtype=torch.float32)
 
     def cuda(self):
         super().cuda()
@@ -228,7 +228,7 @@ class RibbonSnake(Snake):
                  r0_v, r1_v = r0[valid_edge], r1[valid_edge]
                  vec_v = vec[valid_edge]
                  L_sq_v = L_sq[valid_edge]
-                 L_v = torch.sqrt(L_sq_v)
+                 L_v = torch.sqrt(L_sq_v + eps)
                  D_v = vec_v / (L_v.unsqueeze(1) + eps)
 
                  P_exp = points.unsqueeze(1)
@@ -247,7 +247,7 @@ class RibbonSnake(Snake):
                  r1_exp = r1_v.unsqueeze(0)
                  interp_radius = r0_exp * (1.0 - frac) + r1_exp * frac
                  dist_sq_capsule = dist_axis_sq - interp_radius**2
-                 dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=0.0))
+                 dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=eps))
                  signed_dist_capsule = dist_axis - interp_radius
                  min_dist_capsule, _ = signed_dist_capsule.min(dim=1)
 
@@ -261,7 +261,7 @@ class RibbonSnake(Snake):
             C_exp = centers.unsqueeze(0)
             R_exp = radii.unsqueeze(0)
             dist_to_centers_sq = ((P_exp - C_exp)**2).sum(dim=2)
-            dist_to_centers = torch.sqrt(torch.clamp(dist_to_centers_sq, min=0.0))
+            dist_to_centers = torch.sqrt(torch.clamp(dist_to_centers_sq, min=eps))
 
             signed_dist_sphere = dist_to_centers - R_exp
             min_dist_sphere, _ = signed_dist_sphere.min(dim=1)
