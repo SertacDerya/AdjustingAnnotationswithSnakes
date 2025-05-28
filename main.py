@@ -7,7 +7,7 @@ import torch
 from Codes import utils
 from Codes.network import UNet
 from Codes.training import *
-from Codes.Losses.losses import MSELoss, SnakeFastLoss, SnakeSimpleLoss
+from Codes.Losses.losses import MSELoss, SnakeFastLoss, SnakeSimpleLoss, OrigSnakeFast
 from Codes.dataset import DRIVEDataset, collate_fn
 from Codes import utils
 from torch.utils.data import DataLoader
@@ -96,7 +96,7 @@ def main(config_file="main.config"):
         extgradfac = __c__["extgradfac"]
         slow_start = __c__["slow_start"]
         
-        our_loss = SnakeFastLoss(stepsz,alpha,beta,fltrstdev,ndims,nsteps,nsteps_width,
+        our_loss = OrigSnakeFast(stepsz,alpha,beta,fltrstdev,ndims,nsteps,nsteps_width,
                                               cropsz,dmax,maxedgelength,extgradfac,slow_start).cuda()
     else:
         our_loss = None
