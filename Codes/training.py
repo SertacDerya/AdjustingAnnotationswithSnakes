@@ -159,6 +159,9 @@ class Validation(object):
         network.train(False)
         with utils.torch_no_grad:
             for i, data_batch in enumerate(self.dataloader_val):
+                if i == 4:
+                    break
+                
                 image, label, mask = data_batch
                 image  = image.cuda()
                 label  = label.cuda()

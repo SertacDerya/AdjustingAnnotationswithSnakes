@@ -10,7 +10,7 @@ import os
 
 class DRIVEDataset(Dataset):
     
-    def __init__(self, train=True, cropSize=(512, 512), th=15):
+    def __init__(self, train=True, cropSize=(512, 512), th=15, fit_train=False):
         image_path = {
             "train": ["/content/drive/MyDrive/windows2/drive/training/images/{}_training.npy".format(i) for i in range(21,36)],
             "val":  ["/content/drive/MyDrive/windows2/drive/training/images/{}_training.npy".format(i) for i in range(36,41)]
@@ -38,6 +38,7 @@ class DRIVEDataset(Dataset):
         self.train = train
         self.cropSize = cropSize
         self.th = th
+        self.fit_train = fit_train
         
     def __getitem__(self, index):
         image = np.load(self.images[index])
@@ -53,7 +54,7 @@ class DRIVEDataset(Dataset):
         label = label.astype(np.float32)
         mask = mask.astype(np.float32)
         
-        if self.train:
+        if self.train and not self.fit_train:
             image, label, mask, slices = crop([image, label, mask], self.cropSize)
             cropped_graph_view = cropGraph_dontCutEdges(graph, slices)
             cropped_graph = cropped_graph_view.copy()
@@ -67,7 +68,7 @@ class DRIVEDataset(Dataset):
             
         label[label>self.th] = self.th
         
-        if self.train:
+        if self.train and not self.fit_train:
             return torch.tensor(image, dtype=torch.float32), torch.tensor(label, dtype=torch.float32), torch.tensor(mask, dtype=torch.float32), graph, slices
         
         return torch.tensor(image, dtype=torch.float32), torch.tensor(label, dtype=torch.float32), torch.tensor(mask, dtype=torch.float32)
