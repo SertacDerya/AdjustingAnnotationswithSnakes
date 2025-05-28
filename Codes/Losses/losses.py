@@ -4,6 +4,7 @@ from torch import nn
 import numpy as np
 from scipy.ndimage.morphology import distance_transform_edt as dist
 from .gradRib import GradImRib, makeGaussEdgeFltr, cmptGradIm
+from .gradImSnake import GradImSnake
 
 class MSELoss(nn.Module):
 
@@ -103,7 +104,63 @@ class SnakeFastLoss(nn.Module):
         self.snake = s
         return loss
 
+class OrigSnakeFast(nn.Module):
+    def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps, nsteps_width,
+                 cropsz, dmax, maxedgelen, extgradfac, slow_start):
+        super(SnakeFastLoss,self).__init__()
+        self.stepsz = stepsz
+        self.alpha = alpha
+        self.beta = beta
+        self.fltrstdev = fltrstdev
+        self.ndims = ndims
+        self.cropsz = cropsz
+        self.dmax = dmax
+        self.maxedgelen = maxedgelen
+        self.extgradfac = extgradfac
+        self.nsteps = nsteps
 
+        self.fltr = makeGaussEdgeFltr(self.fltrstdev,self.ndims)
+        self.fltrt = torch.from_numpy(self.fltr).type(torch.float32)
+
+        self.iscuda = False
+
+    def cuda(self):
+        super(SnakeFastLoss,self).cuda()
+        self.fltrt = self.fltrt.cuda()
+        self.iscuda = True
+        return self
+
+    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=float("inf")):
+        pred_ = pred_dmap
+        gimg = cmptGradIm(pred_,self.fltrt)
+        gimg *= self.extgradfac
+        snake_dmap = []
+
+        for i,lg in enumerate(zip(lbl_graphs,gimg)):
+            l = lg[0]
+            g = lg[1]
+
+            if crops:
+                crop = crops[i]
+            else:
+                crop=[slice(0,s) for s in g.shape[1:]]
+            s = GradImSnake(l,crop,self.stepsz,self.alpha,
+                                      self.beta,self.ndims,g)
+            if self.iscuda: s.cuda()
+
+            s.optim(self.nsteps)
+
+            dmap = s.renderDistanceMap(g.shape[1:],self.cropsz,self.dmax,
+                                     self.maxedgelen)
+            snake_dmap.append(dmap)
+
+        snake_dm = torch.stack(snake_dmap,0).unsqueeze(1)
+        loss = torch.pow(pred_dmap-snake_dm,2).mean()
+                  
+        self.snake = s
+        self.gimg = gimg
+        
+        return loss
     
 class SnakeSimpleLoss(nn.Module):
     def __init__(self, stepsz,alpha,beta,fltrstdev,ndims,nsteps,

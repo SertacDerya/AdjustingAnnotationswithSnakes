@@ -191,9 +191,6 @@ class RibbonSnake(Snake):
             print("Warning: Rendering distance map for empty snake.")
             return torch.full(size, max_dist, device=device, dtype=centers.dtype)
 
-        if centers.shape[0] != radii.shape[0]:
-             raise ValueError(f"Mismatch between center points ({centers.shape[0]}) and radii ({radii.shape[0]})")
-
         axes = [torch.arange(sz, device=device, dtype=torch.float32) for sz in size]
         mesh = torch.meshgrid(*axes, indexing='ij')
         points = torch.stack([m.flatten() for m in mesh], dim=1)
@@ -201,18 +198,13 @@ class RibbonSnake(Snake):
         min_dist = torch.full((num_points,), float('inf'), device=device, dtype=centers.dtype)
 
         if len(self.h.edges) > 0:
-            try:
-                if hasattr(self, 'n2i') and self.n2i:
-                     edge_indices_list = [(self.n2i[u], self.n2i[v]) for u, v in self.h.edges]
-                else:
-                     edge_indices_list = list(self.h.edges)
+            if hasattr(self, 'n2i') and self.n2i:
+                    edge_indices_list = [(self.n2i[u], self.n2i[v]) for u, v in self.h.edges]
+            else:
+                    edge_indices_list = list(self.h.edges)
 
-                edge_indices = torch.tensor(edge_indices_list, device=device, dtype=torch.long) # (E, 2)
-                del edge_indices_list
-            except KeyError as e:
-                 raise RuntimeError(f"Node ID {e} from graph edges not found in n2i mapping. Ensure Snake init populated n2i correctly.") from e
-            except Exception as e:
-                 raise RuntimeError(f"Error processing graph edges. Ensure self.h and self.n2i are correct. Original error: {e}")
+            edge_indices = torch.tensor(edge_indices_list, device=device, dtype=torch.long) # (E, 2)
+            del edge_indices_list
 
 
             starts = centers[edge_indices[:, 0]]
