@@ -99,7 +99,7 @@ class SnakeFastLoss(nn.Module):
             snake_dmap.append(dmap)
 
         snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1)   
-        loss = ((pred_dmap - snake_dm)**2).mean()
+        loss = ((pred_dmap - snake_dm.detach())**2).mean()
         self.snake = s
         return loss
 
