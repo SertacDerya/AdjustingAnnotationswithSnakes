@@ -173,7 +173,7 @@ class SnakeFastLoss(nn.Module):
         
         # MODIFIED LOSS CALCULATION:
         # Calculate MSE loss
-        squared_diff = (pred_dmap - snake_dm)**2
+        squared_diff = (pred_dmap - snake_dm.detach())**2
         
         # Apply moderate weighting to negative target values
         negative_mask = (snake_dm < 0).float()
