@@ -10,7 +10,7 @@ import os
 
 class DRIVEDataset(Dataset):
     
-    def __init__(self, train=True, cropSize=(512, 512), th=15):
+    def __init__(self, train=True, cropSize=(512, 512), th=15, enhancement_factor=10.0):
         image_path = {
             "train": ["/content/drive/MyDrive/windows2/drive/training/images/{}_training.npy".format(i) for i in range(21,36)],
             "val":  ["/content/drive/MyDrive/windows2/drive/training/images/{}_training.npy".format(i) for i in range(36,41)]
@@ -38,6 +38,7 @@ class DRIVEDataset(Dataset):
         self.train = train
         self.cropSize = cropSize
         self.th = th
+        self.enhancement_factor = enhancement_factor
         
     def __getitem__(self, index):
         image = np.load(self.images[index])
@@ -52,6 +53,9 @@ class DRIVEDataset(Dataset):
         image = image.astype(np.float32)
         label = label.astype(np.float32)
         mask = mask.astype(np.float32)
+
+        negative_mask = label < 0
+        label[negative_mask] *= self.enhancement_factor
         
         if self.train:
             image, label, mask, slices = crop([image, label, mask], self.cropSize)
