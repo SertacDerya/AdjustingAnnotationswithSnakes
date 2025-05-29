@@ -108,7 +108,12 @@ class SnakeFastLoss(nn.Module):
             g = lg[1]  # gradient image
             gw = lg[2]
 
-            s = GradImRib(graph=l, crop=None, stepsz=self.stepsz, alpha=self.alpha,
+            if crops:
+                crop = crops[i]
+            else:
+                crop=[slice(0,s) for s in g.shape[1:]]
+
+            s = GradImRib(graph=l, crop=crop, stepsz=self.stepsz, alpha=self.alpha,
                         beta=self.beta,dim=self.ndims, gimgV=g, gimgW=gw)
                     
             if self.iscuda: 
@@ -116,7 +121,7 @@ class SnakeFastLoss(nn.Module):
             if self.slow_start < epoch:
                 s.optim(self.nsteps, self.nsteps_width)
 
-            dmap = s.render_distance_map_with_widths(g[0].shape)
+            dmap = s.render_distance_map_with_widths(g[1:].shape, self.dmax)
             if mask is not None:
                 dmap = dmap * (mask==0)
             snake_dmap.append(dmap)
@@ -173,144 +178,144 @@ class SnakeFastLoss(nn.Module):
         self.snake = s
         return loss
 
-def visualize_distance_maps(self, pred_dmap, snake_dm, epoch, sample_idx=None):
-    """
-    Visualize the predicted distance map and snake target map.
-    
-    Args:
-        pred_dmap: Predicted distance map tensor from the network
-        snake_dm: Snake distance map tensor (ground truth)
-        epoch: Current epoch number (for filenames)
-        sample_idx: Index of the sample in the batch to visualize
-    """
-    # Set fixed random seed for consistent visualization
-    random.seed(self.vis_seed)
-    np.random.seed(self.vis_seed)
-    torch.manual_seed(self.vis_seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(self.vis_seed)
-    
-    os.makedirs(self.vis_dir, exist_ok=True)
-    
-    # Use the class-specified sample index if none provided
-    if sample_idx is None:
-        sample_idx = self.vis_sample_index
+    def visualize_distance_maps(self, pred_dmap, snake_dm, epoch, sample_idx=None):
+        """
+        Visualize the predicted distance map and snake target map.
         
-    print(f"Using consistent visualization: sample_idx={sample_idx}, seed={self.vis_seed}")
-    
-    # Debug dimensions before processing
-    print(f"DEBUG: pred_dmap shape: {pred_dmap.shape}")
-    print(f"DEBUG: snake_dm shape: {snake_dm.shape}")
-    
-    # Helper function to extract 2D slice from tensor of any dimension
-    def extract_2d_slice(tensor, idx=0):
-        # Convert to numpy
-        tensor_np = tensor.detach().cpu().numpy()
+        Args:
+            pred_dmap: Predicted distance map tensor from the network
+            snake_dm: Snake distance map tensor (ground truth)
+            epoch: Current epoch number (for filenames)
+            sample_idx: Index of the sample in the batch to visualize
+        """
+        # Set fixed random seed for consistent visualization
+        random.seed(self.vis_seed)
+        np.random.seed(self.vis_seed)
+        torch.manual_seed(self.vis_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.vis_seed)
         
-        # Keep reducing dimensions until we get a 2D array
-        while tensor_np.ndim > 2:
-            # If first dimension is larger than 1, take the specified index
-            if tensor_np.shape[0] > 1:
-                if idx < tensor_np.shape[0]:
-                    tensor_np = tensor_np[idx]
+        os.makedirs(self.vis_dir, exist_ok=True)
+        
+        # Use the class-specified sample index if none provided
+        if sample_idx is None:
+            sample_idx = self.vis_sample_index
+            
+        print(f"Using consistent visualization: sample_idx={sample_idx}, seed={self.vis_seed}")
+        
+        # Debug dimensions before processing
+        print(f"DEBUG: pred_dmap shape: {pred_dmap.shape}")
+        print(f"DEBUG: snake_dm shape: {snake_dm.shape}")
+        
+        # Helper function to extract 2D slice from tensor of any dimension
+        def extract_2d_slice(tensor, idx=0):
+            # Convert to numpy
+            tensor_np = tensor.detach().cpu().numpy()
+            
+            # Keep reducing dimensions until we get a 2D array
+            while tensor_np.ndim > 2:
+                # If first dimension is larger than 1, take the specified index
+                if tensor_np.shape[0] > 1:
+                    if idx < tensor_np.shape[0]:
+                        tensor_np = tensor_np[idx]
+                    else:
+                        print(f"Warning: Index {idx} out of bounds for dimension of size {tensor_np.shape[0]}. Using index 0.")
+                        tensor_np = tensor_np[0]
+                # Otherwise just squeeze the first dimension
                 else:
-                    print(f"Warning: Index {idx} out of bounds for dimension of size {tensor_np.shape[0]}. Using index 0.")
-                    tensor_np = tensor_np[0]
-            # Otherwise just squeeze the first dimension
-            else:
-                tensor_np = tensor_np.squeeze(0)
+                    tensor_np = tensor_np.squeeze(0)
+                
+                # Print the new shape for debugging
+                print(f"After reduction: shape = {tensor_np.shape}")
+                
+                # Safety check - if we've reduced too much, stop
+                if tensor_np.ndim <= 2:
+                    break
             
-            # Print the new shape for debugging
-            print(f"After reduction: shape = {tensor_np.shape}")
+            # Final squeeze to handle any remaining singleton dimensions
+            tensor_np = np.squeeze(tensor_np)
             
-            # Safety check - if we've reduced too much, stop
-            if tensor_np.ndim <= 2:
-                break
+            # Ensure we have a 2D array
+            if tensor_np.ndim != 2:
+                raise ValueError(f"Failed to extract 2D array, got shape {tensor_np.shape}")
+                
+            return tensor_np
         
-        # Final squeeze to handle any remaining singleton dimensions
-        tensor_np = np.squeeze(tensor_np)
+        # Process tensors with the helper function
+        try:
+            pred_np = extract_2d_slice(pred_dmap, sample_idx)
+            snake_np = extract_2d_slice(snake_dm, sample_idx)
+            print(f"Successfully extracted 2D slices - pred: {pred_np.shape}, snake: {snake_np.shape}")
+        except Exception as e:
+            print(f"Error extracting 2D slices: {str(e)}")
+            raise
         
-        # Ensure we have a 2D array
-        if tensor_np.ndim != 2:
-            raise ValueError(f"Failed to extract 2D array, got shape {tensor_np.shape}")
-            
-        return tensor_np
-    
-    # Process tensors with the helper function
-    try:
-        pred_np = extract_2d_slice(pred_dmap, sample_idx)
-        snake_np = extract_2d_slice(snake_dm, sample_idx)
-        print(f"Successfully extracted 2D slices - pred: {pred_np.shape}, snake: {snake_np.shape}")
-    except Exception as e:
-        print(f"Error extracting 2D slices: {str(e)}")
-        raise
-    
-    # Verify shapes are correct
-    print(f"DEBUG: Final shapes - pred_np: {pred_np.shape}, snake_np: {snake_np.shape}")
-    
-    # Get min and max values for consistent colormaps
-    vmin = min(pred_np.min(), snake_np.min())
-    vmax = max(pred_np.max(), snake_np.max())
-    
-    # Create a custom diverging colormap with white at zero
-    # Blue for negative (vessels), Red for positive (background)
-    colors = [(0, 0, 1), (0.8, 0.8, 1), (1, 1, 1), (1, 0.8, 0.8), (1, 0, 0)]
-    positions = [0, 0.4, 0.5, 0.6, 1]
-    cmap = LinearSegmentedColormap.from_list("vessel_map", list(zip(positions, colors)))
-    
-    # Create figure with 3 rows and 2 columns
-    fig, axes = plt.subplots(3, 2, figsize=(14, 14))
-    fig.suptitle(f"Snake Distance Map Visualization - Epoch {epoch}", fontsize=16)
-    
-    # Row 1: Distance maps with continuous colors
-    im1 = axes[0, 0].imshow(pred_np, cmap=cmap, vmin=vmin, vmax=vmax)
-    axes[0, 0].set_title(f'Prediction Distance Map\nMin: {pred_np.min():.2f}, Max: {pred_np.max():.2f}')
-    plt.colorbar(im1, ax=axes[0, 0])
-    
-    im2 = axes[0, 1].imshow(snake_np, cmap=cmap, vmin=vmin, vmax=vmax)
-    axes[0, 1].set_title(f'Snake Distance Map (Ground Truth)\nMin: {snake_np.min():.2f}, Max: {snake_np.max():.2f}')
-    plt.colorbar(im2, ax=axes[0, 1])
-    
-    # Row 2: Binary vessel segmentations (negative values = vessels)
-    pred_binary = (pred_np < 0).astype(np.float32)
-    snake_binary = (snake_np < 0).astype(np.float32)
-    
-    vessel_cmap = plt.cm.Blues
-    
-    im3 = axes[1, 0].imshow(pred_binary, cmap=vessel_cmap, vmin=0, vmax=1)
-    axes[1, 0].set_title(f'Predicted Vessels (Negative Values)\nPixels: {np.sum(pred_binary):.0f} ({100*np.mean(pred_binary):.2f}%)')
-    
-    im4 = axes[1, 1].imshow(snake_binary, cmap=vessel_cmap, vmin=0, vmax=1)
-    axes[1, 1].set_title(f'Ground Truth Vessels (Negative Values)\nPixels: {np.sum(snake_binary):.0f} ({100*np.mean(snake_binary):.2f}%)')
-    
-    # Row 3: Difference between maps and distribution histograms
-    diff = pred_np - snake_np
-    im5 = axes[2, 0].imshow(diff, cmap='RdBu_r')
-    axes[2, 0].set_title(f'Difference (Prediction - Ground Truth)\nMin: {diff.min():.2f}, Max: {diff.max():.2f}')
-    plt.colorbar(im5, ax=axes[2, 0])
-    
-    # Histograms of values
-    axes[2, 1].hist(snake_np.flatten(), bins=50, alpha=0.5, color='blue', label='Ground Truth')
-    axes[2, 1].hist(pred_np.flatten(), bins=50, alpha=0.5, color='red', label='Prediction')
-    axes[2, 1].set_title('Value Distribution')
-    axes[2, 1].axvline(x=0, color='black', linestyle='--', label='Zero')
-    axes[2, 1].legend()
-    
-    # Set axes off for all subplots
-    for i in range(3):
-        for j in range(2):
-            if i == 2 and j == 1:  # Skip histogram
-                continue
-            axes[i, j].axis('off')
-    
-    # Save the figure
-    filename = f"snake_viz_epoch_{epoch}_sample_{sample_idx}.png"
-    plt.tight_layout()
-    plt.savefig(os.path.join(self.vis_dir, filename), dpi=150)
-    plt.close()
-    print(f"Saved visualization to {os.path.join(self.vis_dir, filename)}")
-    
-    return fig
+        # Verify shapes are correct
+        print(f"DEBUG: Final shapes - pred_np: {pred_np.shape}, snake_np: {snake_np.shape}")
+        
+        # Get min and max values for consistent colormaps
+        vmin = min(pred_np.min(), snake_np.min())
+        vmax = max(pred_np.max(), snake_np.max())
+        
+        # Create a custom diverging colormap with white at zero
+        # Blue for negative (vessels), Red for positive (background)
+        colors = [(0, 0, 1), (0.8, 0.8, 1), (1, 1, 1), (1, 0.8, 0.8), (1, 0, 0)]
+        positions = [0, 0.4, 0.5, 0.6, 1]
+        cmap = LinearSegmentedColormap.from_list("vessel_map", list(zip(positions, colors)))
+        
+        # Create figure with 3 rows and 2 columns
+        fig, axes = plt.subplots(3, 2, figsize=(14, 14))
+        fig.suptitle(f"Snake Distance Map Visualization - Epoch {epoch}", fontsize=16)
+        
+        # Row 1: Distance maps with continuous colors
+        im1 = axes[0, 0].imshow(pred_np, cmap=cmap, vmin=vmin, vmax=vmax)
+        axes[0, 0].set_title(f'Prediction Distance Map\nMin: {pred_np.min():.2f}, Max: {pred_np.max():.2f}')
+        plt.colorbar(im1, ax=axes[0, 0])
+        
+        im2 = axes[0, 1].imshow(snake_np, cmap=cmap, vmin=vmin, vmax=vmax)
+        axes[0, 1].set_title(f'Snake Distance Map (Ground Truth)\nMin: {snake_np.min():.2f}, Max: {snake_np.max():.2f}')
+        plt.colorbar(im2, ax=axes[0, 1])
+        
+        # Row 2: Binary vessel segmentations (negative values = vessels)
+        pred_binary = (pred_np < 0).astype(np.float32)
+        snake_binary = (snake_np < 0).astype(np.float32)
+        
+        vessel_cmap = plt.cm.Blues
+        
+        im3 = axes[1, 0].imshow(pred_binary, cmap=vessel_cmap, vmin=0, vmax=1)
+        axes[1, 0].set_title(f'Predicted Vessels (Negative Values)\nPixels: {np.sum(pred_binary):.0f} ({100*np.mean(pred_binary):.2f}%)')
+        
+        im4 = axes[1, 1].imshow(snake_binary, cmap=vessel_cmap, vmin=0, vmax=1)
+        axes[1, 1].set_title(f'Ground Truth Vessels (Negative Values)\nPixels: {np.sum(snake_binary):.0f} ({100*np.mean(snake_binary):.2f}%)')
+        
+        # Row 3: Difference between maps and distribution histograms
+        diff = pred_np - snake_np
+        im5 = axes[2, 0].imshow(diff, cmap='RdBu_r')
+        axes[2, 0].set_title(f'Difference (Prediction - Ground Truth)\nMin: {diff.min():.2f}, Max: {diff.max():.2f}')
+        plt.colorbar(im5, ax=axes[2, 0])
+        
+        # Histograms of values
+        axes[2, 1].hist(snake_np.flatten(), bins=50, alpha=0.5, color='blue', label='Ground Truth')
+        axes[2, 1].hist(pred_np.flatten(), bins=50, alpha=0.5, color='red', label='Prediction')
+        axes[2, 1].set_title('Value Distribution')
+        axes[2, 1].axvline(x=0, color='black', linestyle='--', label='Zero')
+        axes[2, 1].legend()
+        
+        # Set axes off for all subplots
+        for i in range(3):
+            for j in range(2):
+                if i == 2 and j == 1:  # Skip histogram
+                    continue
+                axes[i, j].axis('off')
+        
+        # Save the figure
+        filename = f"snake_viz_epoch_{epoch}_sample_{sample_idx}.png"
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.vis_dir, filename), dpi=150)
+        plt.close()
+        print(f"Saved visualization to {os.path.join(self.vis_dir, filename)}")
+        
+        return fig
     
 class SnakeSimpleLoss(nn.Module):
     def __init__(self, stepsz,alpha,beta,fltrstdev,ndims,nsteps,

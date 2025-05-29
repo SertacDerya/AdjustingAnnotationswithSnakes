@@ -103,13 +103,13 @@ class TrainingEpoch(object):
             masks = masks.cuda()
             
             preds = network(images.contiguous())
-            # apply the mask
-            binary_mask = (masks == 0).float() 
-            preds = preds * binary_mask
+            # apply the mask. might create confusion for the unet
+            #binary_mask = (masks == 0).float() 
+            #preds = preds * binary_mask
             
             if self.ours and iterations >= self.ours_start:
             # calls forward on loss here, and snake is adjusted
-                loss = our_loss(preds, graphs, slices, masks, iterations)
+                loss = our_loss(preds, graphs, slices, iterations)
             else:
                 loss = base_loss(preds, labels)
                 
@@ -165,9 +165,9 @@ class Validation(object):
         with utils.torch_no_grad:
             for i, data_batch in enumerate(self.dataloader_val):
                 image, label, mask = data_batch
-                image  = image.cuda()
-                label  = label.cuda()
-                mask   = mask.cuda()
+                image  = image.cuda()[:,None]
+                label  = label.cuda()[:,None]
+                mask   = mask.cuda()[:,None]
 
                 out_shape = (image.shape[0],self.out_channels,*image.shape[2:])
                 pred = utils.to_torch(np.empty(out_shape, np.float32), volatile=True).cuda()
@@ -175,8 +175,8 @@ class Validation(object):
                                             lambda chunk: network(chunk),
                                             self.crop_size, self.margin_size)
                 # apply the mask again
-                binary_mask = (mask == 0).float()
-                pred = pred * binary_mask
+                #binary_mask = (mask == 0).float()
+                #pred = pred * binary_mask
 
                 loss = loss_function(pred, label)
                 loss_v = float(utils.from_torch(loss))
