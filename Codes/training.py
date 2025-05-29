@@ -155,6 +155,11 @@ class Validation(object):
         scores = {"corr":[], "comp":[], "qual":[]}
 
         drive_output_path = "/content/drive/MyDrive/snake_model_outputs"
+        local_output_path = self.output_path
+        drive_valid_path = os.path.join(drive_output_path, "output_valid")
+        local_valid_path = os.path.join(local_output_path, "output_valid")
+        utils.mkdir(drive_valid_path)
+        utils.mkdir(local_valid_path)
 
         network.train(False)
         with utils.torch_no_grad:
@@ -190,26 +195,29 @@ class Validation(object):
                 scores["comp"].append(comp)
                 scores["qual"].append(qual)
                 
-                # save preds
-                pred_outs_path = os.path.join(drive_output_path, "output_valid")
-                utils.mkdir(pred_outs_path)
+                # Save input and ground truth (only once)
+                input_filename_local = os.path.join(local_valid_path, "val_input_{:03d}.npy".format(i))
+                if not os.path.exists(input_filename_local):
+                    np.save(input_filename_local, utils.from_torch(image)[0])
 
-                output_valid = os.path.join(self.output_path, "output_valid")
-                utils.mkdir(output_valid)
+                gt_filename_local = os.path.join(local_valid_path, "val_gt_{:03d}.npy".format(i))
+                if not os.path.exists(gt_filename_local):
+                    np.save(gt_filename_local, label_np)
 
-                input_filename = os.path.join(output_valid, "val_input_{:03d}.npy".format(i))
-                if not os.path.exists(input_filename):
-                    np.save(input_filename, utils.from_torch(image)[0])
-
-                gt_filename = os.path.join(output_valid, "val_gt_{:03d}.npy".format(i))
-                if not os.path.exists(gt_filename):
-                    np.save(gt_filename, label_np)
-
-                pred_filename = os.path.join(pred_outs_path, "val_pred_{:03d}_epoch_{:06d}.npy".format(i, iteration))
-                np.save(pred_filename, pred_np)
-
-                pred_mask_filename = os.path.join(pred_outs_path, "val_predmask_{:03d}_epoch_{:06d}.npy".format(i, iteration))
-                np.save(pred_mask_filename, pred_mask)
+                # Save predictions to BOTH Google Drive and local path
+                # 1. Save to Google Drive
+                drive_pred_filename = os.path.join(drive_valid_path, "val_pred_{:03d}_epoch_{:06d}.npy".format(i, iteration))
+                np.save(drive_pred_filename, pred_np)
+                
+                drive_pred_mask_filename = os.path.join(drive_valid_path, "val_predmask_{:03d}_epoch_{:06d}.npy".format(i, iteration))
+                np.save(drive_pred_mask_filename, pred_mask)
+                
+                # 2. Save to local path (the one you're missing)
+                local_pred_filename = os.path.join(local_valid_path, "val_pred_{:03d}_epoch_{:06d}.npy".format(i, iteration))
+                np.save(local_pred_filename, pred_np)
+                
+                local_pred_mask_filename = os.path.join(local_valid_path, "val_predmask_{:03d}_epoch_{:06d}.npy".format(i, iteration))
+                np.save(local_pred_mask_filename, pred_mask)
 
         scores["qual"] = np.nan_to_num(scores["qual"])
         
@@ -217,16 +225,30 @@ class Validation(object):
         corr_total = np.mean(scores["corr"],axis=0)
         comp_total = np.mean(scores["comp"],axis=0)
 
+        # Also save best quality model
         if self.bestqual < qual_total:
             self.bestqual = qual_total
             for i in range(len(self.dataloader_val)):
-                np.save(os.path.join(output_valid, "pred_{:06d}_bestqual.npy".format(i,iteration)), preds[i])
+                # Save to local path (as before)
+                np.save(os.path.join(local_valid_path, "pred_{:06d}_bestqual.npy".format(i)), preds[i])
             utils.torch_save(os.path.join(self.output_path, "network_bestqual.pickle"),
                              network.state_dict())
         
+        # Save metrics to a CSV file for tracking
+        metrics_file = os.path.join(local_output_path, "metrics.csv")
+        # Create file with header if it doesn't exist
+        if not os.path.exists(metrics_file):
+            with open(metrics_file, 'w') as f:
+                f.write("Iteration,Loss,Correctness,Completeness,Quality\n")
+        
+        # Append metrics
+        with open(metrics_file, 'a') as f:
+            f.write(f"{iteration},{np.mean(losses):.6f},{corr_total:.6f},{comp_total:.6f},{qual_total:.6f}\n")
 
         logger.info("\tMean loss: {}".format(np.mean(losses)))
         logger.info("\tMean qual: {:0.3f}".format(qual_total))
+        logger.info("\tMean corr: {:0.3f}".format(corr_total))
+        logger.info("\tMean comp: {:0.3f}".format(comp_total))
         logger.info("Best quality score is {}".format(self.bestqual))
         
         network.train(True)
