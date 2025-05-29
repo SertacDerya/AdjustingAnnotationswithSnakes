@@ -124,21 +124,11 @@ class SnakeFastLoss(nn.Module):
         snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1) 
 
         snake_min, snake_max = snake_dm.min().item(), snake_dm.max().item()
-        snake_range = snake_max - snake_min
-        
-        # If the range seems unenhanced (targets max around 16, min around -4)
-        # then apply enhancement ourselves
-        if snake_range < 30 and snake_min > -10:
-            snake_negative_mask = snake_dm < 0
-            snake_dm[snake_negative_mask] *= self.enhancement_factor
-            enhanced = True
-        else:
-            enhanced = False
-        
-        # Store the enhanced snake_dm for visualization access
+        snake_negative_mask = snake_dm < 0
+        snake_dm[snake_negative_mask] *= self.enhancement_factor
+            
         self.snake_dm = snake_dm
             
-        # DEBUG: Compare ranges every 50 epochs
         if epoch % 50 == 0:
             pred_min, pred_max = pred_dmap.min().item(), pred_dmap.max().item()
             snake_min, snake_max = snake_dm.min().item(), snake_dm.max().item()
@@ -152,7 +142,6 @@ class SnakeFastLoss(nn.Module):
             print(f"Snake target range: {snake_min:.2f} to {snake_max:.2f} (range: {snake_max-snake_min:.2f})")
             print(f"Prediction negative pixels: {pred_neg_count} ({pred_neg_percent:.2f}%)")
             print(f"Snake target negative pixels: {snake_neg_count} ({snake_neg_percent:.2f}%)")
-            print(f"Enhancement applied here: {enhanced}")
             print(f"Negative weighting factor: {self.negative_weight}")
             
             # Check if there's a range mismatch
@@ -171,18 +160,12 @@ class SnakeFastLoss(nn.Module):
                 except Exception as e:
                     print(f"Warning: Could not create visualization: {str(e)}")
         
-        # MODIFIED LOSS CALCULATION:
-        # Calculate MSE loss
         squared_diff = (pred_dmap - snake_dm.detach())**2
         
-        # Apply moderate weighting to negative target values
         negative_mask = (snake_dm < 0).float()
-        weighted_squared_diff = squared_diff * (1.0 + negative_mask * (self.negative_weight - 1.0))
-
-        # Calculate the final loss
+        weighted_squared_diff = squared_diff * (1.0 + negative_mask * self.negative_weight)
         loss = weighted_squared_diff.mean()
-        
-        # Debug: Show loss components every 50 epochs
+
         if epoch % 50 == 0:
             print(f"Loss: {loss.item():.4f}")
             print("=" * 50)
