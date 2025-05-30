@@ -112,7 +112,7 @@ class TrainingEpoch(object):
             if iterations % 50 == 0:
                 # Plot and save the first image, label, and prediction of the first batch
                 try:
-                    img_to_plot = utils.from_torch(images[0]) # (C, H, W)
+                    img_to_plot = utils.from_torch(images[0]/255.0) # (C, H, W)
                     lbl_to_plot = utils.from_torch(labels[0]) # (C_label, H, W)
                     prd_to_plot = utils.from_torch(preds[0])  # (C_out, H, W)
 
@@ -130,22 +130,27 @@ class TrainingEpoch(object):
                     prd_to_plot = prd_to_plot.squeeze(0) # H, W (assuming single channel prediction or taking first)
 
                     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-                    fig.suptitle(f"Epoch {iterations} - Batch {i}")
+                    fig.suptitle(f"Epoch {iterations} - Batch")
 
-                    axes[0].imshow(img_to_plot, cmap='gray')
+                    im0 = axes[0].imshow(img_to_plot, cmap='gray')
+                    fig.colorbar(im0, ax=axes[0])
                     axes[0].set_title("Input Image")
                     axes[0].axis('off')
 
-                    axes[1].imshow(lbl_to_plot, cmap='viridis') # Or another cmap suitable for distance maps
+                    # plot ground-truth label
+                    im1 = axes[1].imshow(lbl_to_plot, cmap='viridis')
+                    fig.colorbar(im1, ax=axes[1])
                     axes[1].set_title("Ground Truth Label")
                     axes[1].axis('off')
 
-                    axes[2].imshow(prd_to_plot, cmap='viridis') # Or another cmap suitable for distance maps
+                    # plot network prediction
+                    im2 = axes[2].imshow(prd_to_plot, cmap='viridis')
+                    fig.colorbar(im2, ax=axes[2])
                     axes[2].set_title("Network Prediction")
                     axes[2].axis('off')
 
                     plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make space for suptitle
-                    plot_filename = os.path.join("./trainplot/", f"epoch_{iterations}_batch_{i}_visualization.png")
+                    plot_filename = os.path.join("./trainplot/", f"epoch_{iterations}_batch_visualization.png")
                     plt.savefig(plot_filename)
                     plt.close(fig)
                     logger.info(f"Saved visualization to {plot_filename}")

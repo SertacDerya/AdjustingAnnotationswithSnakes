@@ -42,7 +42,6 @@ class DRIVEDataset(Dataset):
     def __getitem__(self, index):
 
         image = np.load(self.images[index]).astype(np.float32)
-        image = image / 255.0
         label = np.load(self.labels[index]).astype(np.float32)
         mask = np.load(self.masks[index]).astype(np.float32)
         graph = load_graph_txt(self.graphs[index])
@@ -60,7 +59,7 @@ class DRIVEDataset(Dataset):
             image, label, mask, slices = crop([image, label,mask], self.cropSize)
         
         negative_mask = (label == 0)
-        label[negative_mask] = self.enhancement_factor    
+        label[negative_mask] = -self.enhancement_factor    
         label[label>self.th] = self.th
         
         if self.train:

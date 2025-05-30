@@ -122,6 +122,8 @@ class SnakeFastLoss(nn.Module):
                 s.optim(self.nsteps, self.nsteps_width) """
 
             dmap = s.render_distance_map_with_widths(self.cropsz, self.dmax)
+            # make everywhere outside of the snake self.dmax
+            dmap[dmap>0] = self.dmax
             if mask is not None:
                 dmap = dmap * (mask==0)
             snake_dmap.append(dmap)
