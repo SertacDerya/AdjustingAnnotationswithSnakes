@@ -6,6 +6,7 @@ import torch
 from . import utils
 from skimage.morphology import skeletonize
 from .scores import correctness_completeness_quality
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +93,12 @@ class TrainingEpoch(object):
         self.dataloader = dataloader
         self.ours = ours
         self.ours_start = ours_start
+        utils.mkdir("./trainplot/")
 
     def __call__(self, iterations, network, optimizer, lr_scheduler, base_loss, our_loss):
         
         mean_loss = 0
-        for images, labels, masks, graphs, slices in self.dataloader:
+        for images, labels, masks, graphs, slices in enumerate(self.dataloader):
 
             images = images.cuda()
             labels = labels.cuda()
@@ -106,10 +108,53 @@ class TrainingEpoch(object):
             # apply the mask. might create confusion for the unet
             #binary_mask = (masks == 0).float() 
             #preds = preds * binary_mask
-            
+
+            if iterations % 50 == 0:
+                # Plot and save the first image, label, and prediction of the first batch
+                try:
+                    img_to_plot = utils.from_torch(images[0]) # (C, H, W)
+                    lbl_to_plot = utils.from_torch(labels[0]) # (C_label, H, W)
+                    prd_to_plot = utils.from_torch(preds[0])  # (C_out, H, W)
+
+                    # Prepare for plotting (e.g., select first channel, transpose if necessary)
+                    # Assuming single-channel or taking the first channel for plotting
+                    if img_to_plot.shape[0] > 1: # More than one channel
+                        if img_to_plot.shape[0] == 3: # RGB
+                             img_to_plot = img_to_plot.transpose(1, 2, 0) # H, W, C
+                        else: # Grayscale with multiple channels, take first
+                            img_to_plot = img_to_plot[0] # H, W
+                    else: # Single channel
+                        img_to_plot = img_to_plot.squeeze(0) # H, W
+                    
+                    lbl_to_plot = lbl_to_plot.squeeze(0) # H, W (assuming single channel label)
+                    prd_to_plot = prd_to_plot.squeeze(0) # H, W (assuming single channel prediction or taking first)
+
+                    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+                    fig.suptitle(f"Epoch {iterations} - Batch {i}")
+
+                    axes[0].imshow(img_to_plot, cmap='gray')
+                    axes[0].set_title("Input Image")
+                    axes[0].axis('off')
+
+                    axes[1].imshow(lbl_to_plot, cmap='viridis') # Or another cmap suitable for distance maps
+                    axes[1].set_title("Ground Truth Label")
+                    axes[1].axis('off')
+
+                    axes[2].imshow(prd_to_plot, cmap='viridis') # Or another cmap suitable for distance maps
+                    axes[2].set_title("Network Prediction")
+                    axes[2].axis('off')
+
+                    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make space for suptitle
+                    plot_filename = os.path.join("./trainplot/", f"epoch_{iterations}_batch_{i}_visualization.png")
+                    plt.savefig(plot_filename)
+                    plt.close(fig)
+                    logger.info(f"Saved visualization to {plot_filename}")
+                except Exception as e:
+                    logger.error(f"Error during plotting/saving visualization: {e}")
+                
             if self.ours and iterations >= self.ours_start:
             # calls forward on loss here, and snake is adjusted
-                loss = our_loss(preds, graphs, slices, iterations)
+                loss = our_loss(preds, graphs, slices, None, iterations)
             else:
                 loss = base_loss(preds, labels)
                 
@@ -164,10 +209,10 @@ class Validation(object):
         network.train(False)
         with utils.torch_no_grad:
             for i, data_batch in enumerate(self.dataloader_val):
-                image, label, mask = data_batch
-                image  = image.cuda()[:,None]
-                label  = label.cuda()[:,None]
-                mask   = mask.cuda()[:,None]
+                image, label, mask, graph = data_batch
+                image  = image.cuda()
+                label  = label.cuda()
+                mask   = mask.cuda()
 
                 out_shape = (image.shape[0],self.out_channels,*image.shape[2:])
                 pred = utils.to_torch(np.empty(out_shape, np.float32), volatile=True).cuda()

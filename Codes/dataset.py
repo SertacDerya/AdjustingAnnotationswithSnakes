@@ -7,7 +7,7 @@ from .utils import load_graph_txt, to_torch
 
 class DRIVEDataset(Dataset):
     
-    def __init__(self, train=True, cropSize=(96,96), th=15, noise=False, enhancement_factor=10.0):
+    def __init__(self, train=True, useTrainData=False, cropSize=(96,96), th=15, noise=False, enhancement_factor=10.0):
         
         image_path = {
             "train": ["/content/drive/MyDrive/windows2/drive/training/images/{}_training.npy".format(i) for i in range(21,36)],
@@ -37,12 +37,14 @@ class DRIVEDataset(Dataset):
         self.cropSize = cropSize
         self.th = th
         self.enhancement_factor = enhancement_factor
+        self.useTrainData = useTrainData
         
     def __getitem__(self, index):
 
-        image = np.load(self.images[index])
-        label = np.load(self.labels[index]),
-        mask = np.load(self.masks[index])
+        image = np.load(self.images[index]).astype(np.float32)
+        image = image / 255.0
+        label = np.load(self.labels[index]).astype(np.float32)
+        mask = np.load(self.masks[index]).astype(np.float32)
         graph = load_graph_txt(self.graphs[index])
 
         # do the masking for the label here. might create confusion to output 0 values also for the masked spaces
@@ -53,16 +55,18 @@ class DRIVEDataset(Dataset):
             graph.nodes[n]["pos"] = graph.nodes[n]["pos"][-1::-1]
             
         slices = None
-        negative_mask = (label == 0)
-        label[negative_mask] = self.enhancement_factor
         
         if self.train:
             image, label, mask, slices = crop([image, label,mask], self.cropSize)
-            
+        
+        negative_mask = (label == 0)
+        label[negative_mask] = self.enhancement_factor    
         label[label>self.th] = self.th
         
         if self.train:
             return torch.tensor(image), torch.tensor(label), torch.tensor(mask), graph, slices
+        if self.useTrainData:
+            return torch.tensor(image), torch.tensor(label), torch.tensor(mask), graph
         
         return torch.tensor(image), torch.tensor(label), torch.tensor(mask)
 
@@ -71,10 +75,22 @@ class DRIVEDataset(Dataset):
 
 def collate_fn(data):
     transposed_data = list(zip(*data))
-    images = torch.stack(transposed_data[0], 0)[:,None]
-    labels = torch.stack(transposed_data[1], 0)[:,None]
+    images = torch.stack(transposed_data[0], 0).permute(0, 3, 1, 2)
+    labels = torch.stack(transposed_data[1], 0).unsqueeze(1)
     masks = torch.stack(transposed_data[2], 0).unsqueeze(1)
-    graphs = transposed_data[2]
-    slices = transposed_data[3]
+
+    graphs = None
+    slices = None
+    if len(transposed_data) > 3:
+        graphs = transposed_data[3]
+    if len(transposed_data) > 4:
+        slices = transposed_data[4]
+
+    if graphs is not None:
+        if slices is not None:
+            return images, labels, masks, graphs, slices
+        return images, labels, masks, graphs
+    else:
+        return images, labels, masks
     
-    return images, labels, masks, graphs, slices
+    

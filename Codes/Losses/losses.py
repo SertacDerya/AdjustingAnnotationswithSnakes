@@ -118,10 +118,10 @@ class SnakeFastLoss(nn.Module):
                     
             if self.iscuda: 
                 s.cuda()
-            if self.slow_start < epoch:
-                s.optim(self.nsteps, self.nsteps_width)
+            """ if self.slow_start < epoch:
+                s.optim(self.nsteps, self.nsteps_width) """
 
-            dmap = s.render_distance_map_with_widths(g[1:].shape, self.dmax)
+            dmap = s.render_distance_map_with_widths(self.cropsz, self.dmax)
             if mask is not None:
                 dmap = dmap * (mask==0)
             snake_dmap.append(dmap)
