@@ -64,11 +64,11 @@ class DRIVEDataset(Dataset):
         label[label>self.th] = self.th
         
         if self.train:
-            return torch.tensor(image), torch.tensor(label), torch.tensor(mask), graph, slices
+            return torch.tensor(image, dtype=torch.float32), torch.tensor(label, dtype=torch.float32), torch.tensor(mask, dtype=torch.float32), graph, slices
         if self.useTrainData:
-            return torch.tensor(image), torch.tensor(label), torch.tensor(mask), graph
+            return torch.tensor(image, dtype=torch.float32), torch.tensor(label, dtype=torch.float32), torch.tensor(mask, dtype=torch.float32), graph
         
-        return torch.tensor(image), torch.tensor(label), torch.tensor(mask)
+        return torch.tensor(image, dtype=torch.float32), torch.tensor(label, dtype=torch.float32), torch.tensor(mask, dtype=torch.float32)
 
     def __len__(self):
         return len(self.images)
