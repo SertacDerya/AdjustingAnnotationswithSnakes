@@ -65,17 +65,13 @@ class SnakeFastLoss(nn.Module):
         self.iscuda = False
 
         self.negative_weight = negative_weight
+        self.enhancement_factor = 2.0
         
-        # Enhancement factor to match dataset.py
-        self.enhancement_factor = 10.0
-        
-        # NEW: Enable visualization with fixed seed
-        self.visualize_maps = True  # Set to True to enable visualization
+        self.visualize_maps = True
         self.vis_dir = 'snake_visualizations'
         self.vis_seed = vis_seed
         self.vis_sample_index = vis_sample_index
         
-        # Set random seed for reproducible visualizations
         random.seed(self.vis_seed)
         np.random.seed(self.vis_seed)
         torch.manual_seed(self.vis_seed)
@@ -94,8 +90,7 @@ class SnakeFastLoss(nn.Module):
         # crops is a list of slices, each represents the crop area of the corresponding snake
 
         pred_ = pred_dmap
-        dmapW = torch.abs(pred_).clone()
-        gimgW = cmptGradIm(dmapW, self.fltrt)
+        gimgW = cmptGradIm(pred_.abs(), self.fltrt)
         gimg = cmptGradIm(pred_, self.fltrt)
         gimg *= self.extgradfac
         gimgW *= self.extgradfac
@@ -118,8 +113,8 @@ class SnakeFastLoss(nn.Module):
                     
             if self.iscuda: 
                 s.cuda()
-            """ if self.slow_start < epoch:
-                s.optim(self.nsteps, self.nsteps_width) """
+            if self.slow_start < epoch:
+                s.optim(self.nsteps, self.nsteps_width)
 
             dmap = s.render_distance_map_with_widths(self.cropsz, self.dmax)
             # make everywhere outside of the snake self.dmax
@@ -167,7 +162,7 @@ class SnakeFastLoss(nn.Module):
                 except Exception as e:
                     print(f"Warning: Could not create visualization: {str(e)}")
         
-        squared_diff = (pred_dmap - snake_dm.detach())**2
+        squared_diff = (pred_dmap - snake_dm)**2
         
         negative_mask = (snake_dm < 0).float()
         weighted_squared_diff = squared_diff * (1.0 + negative_mask * self.negative_weight)
@@ -320,63 +315,137 @@ class SnakeFastLoss(nn.Module):
         return fig
     
 class SnakeSimpleLoss(nn.Module):
-    def __init__(self, stepsz,alpha,beta,fltrstdev,ndims,nsteps,
-                       cropsz,dmax,maxedgelen,extgradfac):
-        super(SnakeSimpleLoss,self).__init__()
-        self.stepsz=stepsz
-        self.alpha=alpha
-        self.beta=beta
-        self.fltrstdev=fltrstdev
-        self.ndims=ndims
-        self.cropsz=cropsz
-        self.dmax=dmax
-        self.maxedgelen=maxedgelen
-        self.extgradfac=extgradfac
-        self.nsteps=nsteps
+    def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps, nsteps_width,
+                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=1.5,
+                 vis_seed=42, vis_sample_index=0):
+        super(SnakeSimpleLoss, self).__init__()
+        self.stepsz = stepsz
+        self.alpha = alpha
+        self.beta = beta
+        self.fltrstdev = fltrstdev
+        self.ndims = ndims
+        self.cropsz = cropsz
+        self.dmax = dmax
+        self.maxedgelen = maxedgelen
+        self.extgradfac = extgradfac
+        self.nsteps = nsteps
+        self.nsteps_width = nsteps_width
+        self.slow_start = slow_start
 
-        self.fltr =makeGaussEdgeFltr(self.fltrstdev,self.ndims)
-        self.fltrt=torch.from_numpy(self.fltr).type(torch.float32)
+        self.fltr = makeGaussEdgeFltr(self.fltrstdev, self.ndims)
+        self.fltrt = torch.from_numpy(self.fltr).type(torch.float32)
 
-        self.iscuda=False
+        self.iscuda = False
+
+        self.negative_weight = negative_weight
+        self.enhancement_factor = 2.0
+        
+        self.visualize_maps = True
+        self.vis_dir = 'snake_visualizations'
+        self.vis_seed = vis_seed
+        self.vis_sample_index = vis_sample_index
+        
+        random.seed(self.vis_seed)
+        np.random.seed(self.vis_seed)
+        torch.manual_seed(self.vis_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(self.vis_seed)
 
     def cuda(self):
-        super(SnakeSimpleLoss,self).cuda()
-        self.fltrt=self.fltrt.cuda()
-        self.iscuda=True
+        super(SnakeSimpleLoss, self).cuda()
+        self.fltrt = self.fltrt.cuda()
+        self.iscuda = True
         return self
 
-    def forward(self,pred_dmap,lbl_graphs,crops=None):
-    
-        pred_=pred_dmap.detach()
-        dmapW = torch.abs(pred_).clone()
-        gimgW = cmptGradIm(dmapW.detach(), self.fltrt)
-        gimg = cmptGradIm(pred_.detach(), self.fltrt)
+    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=float("inf")):
+        # pred_dmap is the predicted distance map from the UNet
+        # lbl_graphs contains graphs each represent a label as a snake
+        # crops is a list of slices, each represents the crop area of the corresponding snake
+
+        pred_ = pred_dmap
+        gimgW = cmptGradIm(pred_.abs(), self.fltrt)
+        gimg = cmptGradIm(pred_, self.fltrt)
         gimg *= self.extgradfac
         gimgW *= self.extgradfac
         snake_dmap = []
 
-        for i,lg in enumerate(zip(lbl_graphs,gimg, gimgW)):
-            l = lg[0]
-            g = lg[1]
+        for i, lg in enumerate(zip(lbl_graphs, gimg, gimgW)):
+            # i is index num
+            # lg is a tuple of a graph and a gradient image
+            l = lg[0]  # graph
+            g = lg[1]  # gradient image
             gw = lg[2]
- 
-            s = GradImRib(graph=l, crop=None, stepsz=self.stepsz, alpha=self.alpha,
+
+            if crops:
+                crop = crops[i]
+            else:
+                crop=[slice(0,s) for s in g.shape[1:]]
+
+            s = GradImRib(graph=l, crop=crop, stepsz=self.stepsz, alpha=self.alpha,
                         beta=self.beta,dim=self.ndims, gimgV=g, gimgW=gw)
-            
+                    
             if self.iscuda: 
                 s.cuda()
+            if self.slow_start < epoch:
+                s.optim(self.nsteps, self.nsteps_width)
 
-            s.optim(self.nsteps)
-
-            dmap = s.render_distance_map_with_widths(g[0].shape)
+            dmap = s.render_distance_map_with_widths(self.cropsz, self.dmax)
+            # make everywhere outside of the snake self.dmax
+            dmap[dmap>0] = self.dmax
+            if mask is not None:
+                dmap = dmap * (mask==0)
             snake_dmap.append(dmap)
 
-        snake_dm=torch.stack(snake_dmap,0).unsqueeze(1)
-        loss=torch.pow(pred_dmap-snake_dm,2).mean()
-                  
-        self.snake=s
-        self.gimg=gimg
+        snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1) 
+
+        snake_min, snake_max = snake_dm.min().item(), snake_dm.max().item()
+        snake_negative_mask = snake_dm < 0
+        snake_dm[snake_negative_mask] *= self.enhancement_factor
+            
+        self.snake_dm = snake_dm
+            
+        if epoch % 50 == 0:
+            pred_min, pred_max = pred_dmap.min().item(), pred_dmap.max().item()
+            snake_min, snake_max = snake_dm.min().item(), snake_dm.max().item()
+            pred_neg_count = (pred_dmap < 0).sum().item()
+            snake_neg_count = (snake_dm < 0).sum().item()
+            pred_neg_percent = 100 * pred_neg_count / pred_dmap.numel()
+            snake_neg_percent = 100 * snake_neg_count / snake_dm.numel()
+            
+            print(f"\n=== SnakeFastLoss Debug - Epoch {epoch} ===")
+            print(f"Prediction range: {pred_min:.2f} to {pred_max:.2f} (range: {pred_max-pred_min:.2f})")
+            print(f"Snake target range: {snake_min:.2f} to {snake_max:.2f} (range: {snake_max-snake_min:.2f})")
+            print(f"Prediction negative pixels: {pred_neg_count} ({pred_neg_percent:.2f}%)")
+            print(f"Snake target negative pixels: {snake_neg_count} ({snake_neg_percent:.2f}%)")
+            print(f"Negative weighting factor: {self.negative_weight}")
+            
+            # Check if there's a range mismatch
+            range_ratio = (pred_max - pred_min) / (snake_max - snake_min) if (snake_max - snake_min) > 0 else 0
+            print(f"Prediction/Snake range ratio: {range_ratio:.2f}")
+            
+            if snake_neg_count == 0:
+                print("⚠️  WARNING: Snake targets have NO negative values!")
+            if pred_neg_count == 0:
+                print("⚠️  WARNING: Predictions have NO negative values!")
+            
+            # NEW: Visualize the maps with fixed sample index
+            if self.visualize_maps:
+                try:
+                    self.visualize_distance_maps(pred_dmap, snake_dm, epoch, sample_idx=self.vis_sample_index)
+                except Exception as e:
+                    print(f"Warning: Could not create visualization: {str(e)}")
         
+        squared_diff = (pred_dmap - snake_dm.detach())**2
+        
+        negative_mask = (snake_dm < 0).float()
+        weighted_squared_diff = squared_diff * (1.0 + negative_mask * self.negative_weight)
+        loss = weighted_squared_diff.mean()
+
+        if epoch % 50 == 0:
+            print(f"Loss: {loss.item():.4f}")
+            print("=" * 50)
+        
+        self.snake = s
         return loss
     
     
