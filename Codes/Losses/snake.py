@@ -138,7 +138,7 @@ class Snake():
         self.beta  =beta
         self.ndims=ndims
         
-        self.h=graph
+        self.h=cropGraph(graph,crop)
         a,s,fd,n2i=getA(self.h,self.alpha,self.beta,self.ndims)
         c=invertALambdaI(a,self.stepsz)
         self.c = th.from_numpy(c).type(th.float32)
@@ -187,5 +187,4 @@ class Snake():
         # maxedgelen is the maximum edge length in the graph
         return renderDistBig(self.getGraph(),self.getPos(),self.n2i,size,
                              cropsz,dmax,maxedgelen)
-
 

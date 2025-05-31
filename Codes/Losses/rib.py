@@ -38,8 +38,8 @@ class RibbonSnake(Snake):
         # Normal initialization of Snake super class
         super().__init__(graph, crop, stepsz, alpha, beta, dim)
         # Additionally we sample from a normal distrubution for widths of nodes
-        #self.w = torch.randn(self.s.shape[0]).abs()
-        self.w = torch.randint(low=2, high=9, size=(self.s.shape[0],), dtype=torch.float32)
+        #self.w = torch.ones(self.s.shape[0]) * 8.0
+        self.w = torch.randint(low=2, high=10, size=(self.s.shape[0],), dtype=torch.float32)
 
     def cuda(self):
         super().cuda()
@@ -196,12 +196,9 @@ class RibbonSnake(Snake):
 
         axes = [torch.arange(sz, device=device, dtype=torch.float32) for sz in size]
         mesh = torch.meshgrid(*axes, indexing='ij')
-        del axes
         points = torch.stack([m.flatten() for m in mesh], dim=1)
-        del mesh
         num_points = points.shape[0]
         min_dist = torch.full((num_points,), float('inf'), device=device, dtype=centers.dtype)
-        del num_points
 
         if len(self.h.edges) > 0:
             try:
@@ -222,90 +219,52 @@ class RibbonSnake(Snake):
             ends   = centers[edge_indices[:, 1]]
             r0     = radii[edge_indices[:, 0]]
             r1     = radii[edge_indices[:, 1]]
-            del edge_indices
 
             vec = ends - starts
             L_sq = (vec**2).sum(dim=1)
             valid_edge = L_sq > eps**2
             if torch.any(valid_edge):
-                 starts_v, ends_v = starts[valid_edge], ends[valid_edge]
+                 starts_v, _ = starts[valid_edge], ends[valid_edge]
                  r0_v, r1_v = r0[valid_edge], r1[valid_edge]
                  vec_v = vec[valid_edge]
                  L_sq_v = L_sq[valid_edge]
-                 L_v = torch.sqrt(L_sq_v)
-                 del L_sq_v
+                 L_v = torch.sqrt(L_sq_v + eps)
                  D_v = vec_v / (L_v.unsqueeze(1) + eps)
-                 del vec_v
 
                  P_exp = points.unsqueeze(1)
                  S_exp = starts_v.unsqueeze(0)
-                 del starts_v
                  D_exp = D_v.unsqueeze(0)
-                 del D_v
                  L_exp = L_v.unsqueeze(0)
-                 del L_v
 
                  v_point_start = P_exp - S_exp
                  proj = (v_point_start * D_exp).sum(dim=2)
-                 del v_point_start
                  t = torch.clamp(proj, min=torch.tensor(0.0, device=device), max=L_exp)
-                 del proj
 
                  closest_on_axis = S_exp + D_exp * t.unsqueeze(-1)
-                 del S_exp
-                 del D_exp
                  dist_axis_sq = ((P_exp - closest_on_axis)**2).sum(dim=2)
-                 del closest_on_axis
                  frac = t / torch.clamp(L_exp, min=eps)
-                 del t
-                 del L_exp
                  r0_exp = r0_v.unsqueeze(0)
-                 del r0_v
                  r1_exp = r1_v.unsqueeze(0)
-                 del r1_v
                  interp_radius = r0_exp * (1.0 - frac) + r1_exp * frac
-                 del r0_exp
-                 del r1_exp
-                 del frac
-                 dist_sq_capsule = dist_axis_sq - interp_radius**2
-                 del dist_sq_capsule
-                 dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=0.0))
-                 del dist_axis_sq
+                 dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=eps))
                  signed_dist_capsule = dist_axis - interp_radius
-                 del dist_axis
-                 del interp_radius
                  min_dist_capsule, _ = signed_dist_capsule.min(dim=1)
-                 del signed_dist_capsule
 
                  min_dist = torch.minimum(min_dist, min_dist_capsule)
-                 del min_dist_capsule
                  # P_exp is still needed for sphere calculation
-
-            del starts, ends, r0, r1, vec, L_sq
-            del valid_edge
 
         if centers.shape[0] > 0:
             # Reuse P_exp if it exists from capsule calculation
             if 'P_exp' not in locals():
                 P_exp = points.unsqueeze(1)
             C_exp = centers.unsqueeze(0)
-            del centers
             R_exp = radii.unsqueeze(0)
-            del radii
             dist_to_centers_sq = ((P_exp - C_exp)**2).sum(dim=2)
-            del C_exp
-            dist_to_centers = torch.sqrt(torch.clamp(dist_to_centers_sq, min=0.0))
-            del dist_to_centers_sq
+            dist_to_centers = torch.sqrt(torch.clamp(dist_to_centers_sq, min=eps))
 
             signed_dist_sphere = dist_to_centers - R_exp
-            del R_exp
-            del dist_to_centers
             min_dist_sphere, _ = signed_dist_sphere.min(dim=1)
-            del signed_dist_sphere
             min_dist = torch.minimum(min_dist, min_dist_sphere)
-            del min_dist_sphere
-            del P_exp
 
-        del points
         dist_clamped = torch.clamp(min_dist, max=max_dist)
         return dist_clamped.reshape(*size)

@@ -2,10 +2,10 @@ import time
 import numpy as np
 import os
 import logging
-import torch
 from . import utils
 from skimage.morphology import skeletonize_3d
 from .scores import correctness_completeness_quality
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class TrainingEpoch(object):
     def __call__(self, iterations, network, optimizer, lr_scheduler, base_loss, our_loss):
         
         mean_loss = 0
-        for images, labels, graphs, slices in self.dataloader:
+        for batch_idx, (images, labels, graphs, slices) in enumerate(self.dataloader):
 
             images = images.cuda()
             labels = labels.cuda()
@@ -104,7 +104,6 @@ class TrainingEpoch(object):
             preds = network(images.contiguous())
             
             if self.ours and iterations >= self.ours_start:
-            # calls forward on loss here, and snake is adjusted
                 loss = our_loss(preds, graphs, slices)
             else:
                 loss = base_loss(preds, labels)
@@ -119,14 +118,69 @@ class TrainingEpoch(object):
             mean_loss += loss_v
             optimizer.zero_grad()
             loss.backward()
-            # optimizer optimizes the network parameters
             optimizer.step()
 
             if lr_scheduler is not None:
                 lr_scheduler.step()
 
-            if torch.cuda.is_available() and iterations % 10 == 0:
-                torch.cuda.empty_cache()
+            if batch_idx == 0 and iterations % 10 == 0: # Adjust plotting frequency as needed
+                img_to_plot = utils.from_torch(images[0]) # (C, D, H, W) or (D, H, W)
+                lbl_to_plot = utils.from_torch(labels[0]) # (C_label, D, H, W) or (D, H, W)
+                prd_to_plot = utils.from_torch(preds[0])  # (C_out, D, H, W) or (D, H, W)
+
+                # Remove channel dim if it's 1, otherwise take the first channel
+                if img_to_plot.ndim == 4: # C, D, H, W
+                    img_to_plot = img_to_plot[0] # D, H, W
+                if lbl_to_plot.ndim == 4:
+                    lbl_to_plot = lbl_to_plot[0]
+                if prd_to_plot.ndim == 4:
+                    prd_to_plot = prd_to_plot[0]
+                
+                # Ensure they are 3D
+                if not (img_to_plot.ndim == 3 and lbl_to_plot.ndim == 3 and prd_to_plot.ndim == 3):
+                    print(f"Skipping plotting for iteration {iterations}, batch {batch_idx} due to unexpected dimensions.")
+                    print(f"Image shape: {img_to_plot.shape}, Label shape: {lbl_to_plot.shape}, Pred shape: {prd_to_plot.shape}")
+                    continue
+
+
+                fig, axes = plt.subplots(3, 3, figsize=(15, 15))
+                fig.suptitle(f"Iteration {iterations} - Batch {batch_idx} - Item 0 Slices")
+
+                data_to_plot = [
+                    (img_to_plot, "Input Image", 'gray'),
+                    (lbl_to_plot, "Ground Truth Label", 'viridis'),
+                    (prd_to_plot, "Network Prediction", 'viridis')
+                ]
+
+                for i, (data_vol, title_prefix, cmap) in enumerate(data_to_plot):
+                    # X slice (min along axis 0 - Depth)
+                    slice_x = np.min(data_vol, axis=0)
+                    im_x = axes[i, 0].imshow(slice_x.T, cmap=cmap, origin='lower') # Transpose for consistent view with Y,Z
+                    axes[i, 0].set_title(f"{title_prefix} (Y-Z projection)")
+                    fig.colorbar(im_x, ax=axes[i, 0], orientation='horizontal', fraction=0.046, pad=0.04)
+                    axes[i, 0].axis('off')
+
+                    # Y slice (min along axis 1 - Height)
+                    slice_y = np.min(data_vol, axis=1)
+                    im_y = axes[i, 1].imshow(slice_y.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Z
+                    axes[i, 1].set_title(f"{title_prefix} (X-Z projection)")
+                    fig.colorbar(im_y, ax=axes[i, 1], orientation='horizontal', fraction=0.046, pad=0.04)
+                    axes[i, 1].axis('off')
+
+                    # Z slice (min along axis 2 - Width)
+                    slice_z = np.min(data_vol, axis=2)
+                    im_z = axes[i, 2].imshow(slice_z.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Y
+                    axes[i, 2].set_title(f"{title_prefix} (X-Y projection)")
+                    fig.colorbar(im_z, ax=axes[i, 2], orientation='horizontal', fraction=0.046, pad=0.04)
+                    axes[i, 2].axis('off')
+                
+                plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to make space for suptitle
+                
+                # Save or show the plot
+                plot_filename = f"plot_iter_{iterations}_batch_{batch_idx}.png"
+                plt.savefig(plot_filename)
+                plt.close(fig)
+                logger.info(f"Saved visualization to {plot_filename}")
 
         return {"loss": float(mean_loss/len(self.dataloader))}
     
@@ -173,7 +227,7 @@ class Validation(object):
                 preds.append(pred_np)
                 label_np = utils.from_torch(label)[0]
                 
-                pred_mask = skeletonize_3d((pred_np <= 4)[0])//255
+                pred_mask = skeletonize_3d((pred_np < 5)[0])//255
                 label_mask = (label_np==0)
 
                 corr, comp, qual = correctness_completeness_quality(pred_mask, label_mask, slack=3)
@@ -182,26 +236,10 @@ class Validation(object):
                 scores["comp"].append(comp)
                 scores["qual"].append(qual)
                 
-                # save preds
-                pred_outs_path = os.path.join(drive_output_path, "output_valid")
-                utils.mkdir(pred_outs_path)
-
+                # save the prediction here
                 output_valid = os.path.join(self.output_path, "output_valid")
                 utils.mkdir(output_valid)
-
-                input_filename = os.path.join(output_valid, "val_input_{:03d}.npy".format(i))
-                if not os.path.exists(input_filename):
-                    np.save(input_filename, utils.from_torch(image)[0])
-
-                gt_filename = os.path.join(output_valid, "val_gt_{:03d}.npy".format(i))
-                if not os.path.exists(gt_filename):
-                    np.save(gt_filename, label_np)
-
-                pred_filename = os.path.join(pred_outs_path, "val_pred_{:03d}_epoch_{:06d}.npy".format(i, iteration))
-                np.save(pred_filename, pred_np)
-
-                pred_mask_filename = os.path.join(pred_outs_path, "val_predmask_{:03d}_epoch_{:06d}.npy".format(i, iteration))
-                np.save(pred_mask_filename, pred_mask)
+                np.save(os.path.join(output_valid, "pred_{:06d}_final.npy".format(i,iteration)), pred_np)
 
         scores["qual"] = np.nan_to_num(scores["qual"])
         
