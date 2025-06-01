@@ -84,7 +84,7 @@ class SnakeFastLoss(nn.Module):
         self.iscuda = True
         return self
 
-    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=float("inf")):
+    def forward(self, pred_dmap, lbl_graphs, crops=None, epoch=float("inf")):
         # pred_dmap is the predicted distance map from the UNet
         # lbl_graphs contains graphs each represent a label as a snake
         # crops is a list of slices, each represents the crop area of the corresponding snake
@@ -116,11 +116,9 @@ class SnakeFastLoss(nn.Module):
             if self.slow_start < epoch:
                 s.optim(self.nsteps, self.nsteps_width)
 
-            dmap = s.render_distance_map_with_widths(self.cropsz, self.dmax)
+            dmap = s.render_distance_map_with_widths_cropped(g[1:].shape, self.cropsz, self.dmax, self.maxedgelen)
             # make everywhere outside of the snake self.dmax
             dmap[dmap>0] = self.dmax
-            if mask is not None:
-                dmap = dmap * (mask==0)
             snake_dmap.append(dmap)
 
         snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1) 
@@ -431,7 +429,7 @@ class SnakeSimpleLoss(nn.Module):
         self.iscuda = True
         return self
 
-    def forward(self, pred_dmap, lbl_graphs, crops=None, mask= None, epoch=float("inf")):
+    def forward(self, pred_dmap, lbl_graphs, crops=None, epoch=float("inf")):
         # pred_dmap is the predicted distance map from the UNet
         # lbl_graphs contains graphs each represent a label as a snake
         # crops is a list of slices, each represents the crop area of the corresponding snake
@@ -463,11 +461,9 @@ class SnakeSimpleLoss(nn.Module):
             if self.slow_start < epoch:
                 s.optim(self.nsteps, self.nsteps_width)
 
-            dmap = s.render_distance_map_with_widths(self.cropsz, self.dmax)
+            dmap = s.render_distance_map_with_widths_cropped(g[1:].shape, self.cropsz, self.dmax, self.maxedgelen)
             # make everywhere outside of the snake self.dmax
             dmap[dmap>0] = self.dmax
-            if mask is not None:
-                dmap = dmap * (mask==0)
             snake_dmap.append(dmap)
 
         snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1) 

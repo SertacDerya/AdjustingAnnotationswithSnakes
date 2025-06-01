@@ -92,6 +92,7 @@ class TrainingEpoch(object):
         self.dataloader = dataloader
         self.ours = ours
         self.ours_start = ours_start
+        utils.mkdir("./trainplot/")
 
     def __call__(self, iterations, network, optimizer, lr_scheduler, base_loss, our_loss):
         
@@ -104,7 +105,7 @@ class TrainingEpoch(object):
             preds = network(images.contiguous())
             
             if self.ours and iterations >= self.ours_start:
-                loss = our_loss(preds, graphs, slices)
+                loss = our_loss(preds, graphs, slices, iterations)
             else:
                 loss = base_loss(preds, labels)
                 
@@ -177,7 +178,7 @@ class TrainingEpoch(object):
                 plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to make space for suptitle
                 
                 # Save or show the plot
-                plot_filename = f"plot_iter_{iterations}_batch_{batch_idx}.png"
+                plot_filename = os.path.join("./trainplot/", f"plot_iter_{iterations}_batch_{batch_idx}.png")
                 plt.savefig(plot_filename)
                 plt.close(fig)
                 logger.info(f"Saved visualization to {plot_filename}")
