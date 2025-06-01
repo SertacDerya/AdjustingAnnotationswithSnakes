@@ -43,7 +43,7 @@ class MAELoss(nn.Module):
 
 class SnakeFastLoss(nn.Module):
     def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps, nsteps_width,
-                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=1.5,
+                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=0.0,
                  vis_seed=42, vis_sample_index=0):
         super(SnakeFastLoss, self).__init__()
         self.stepsz = stepsz
@@ -77,6 +77,8 @@ class SnakeFastLoss(nn.Module):
         torch.manual_seed(self.vis_seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(self.vis_seed)
+
+        self.batch = 0
 
     def cuda(self):
         super(SnakeFastLoss, self).cuda()
@@ -129,7 +131,7 @@ class SnakeFastLoss(nn.Module):
             
         self.snake_dm = snake_dm
             
-        if epoch % 50 == 0:
+        if epoch % 10 == 0:
             pred_min, pred_max = pred_dmap.min().item(), pred_dmap.max().item()
             snake_min, snake_max = snake_dm.min().item(), snake_dm.max().item()
             pred_neg_count = (pred_dmap < 0).sum().item()
@@ -301,9 +303,10 @@ class SnakeFastLoss(nn.Module):
             axes[5, 2].axis('off')
             
             plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-            filename = f"snake_viz_epoch_{epoch}_sample_{sample_idx}_3D.png"
+            filename = f"snake_viz_epoch_{epoch}_sample_{sample_idx}_{self.batch}_3D.png"
             plt.savefig(os.path.join(self.vis_dir, filename), dpi=150)
             plt.close(fig)
+            self.batch += 1
             print(f"Saved 3D visualization to {os.path.join(self.vis_dir, filename)}")
 
         elif self.ndims == 2:
