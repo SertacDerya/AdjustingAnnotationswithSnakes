@@ -124,20 +124,18 @@ class TrainingEpoch(object):
             if lr_scheduler is not None:
                 lr_scheduler.step()
 
-            if batch_idx == 0 and iterations % 10 == 0: # Adjust plotting frequency as needed
-                img_to_plot = utils.from_torch(images[0]) # (C, D, H, W) or (D, H, W)
-                lbl_to_plot = utils.from_torch(labels[0]) # (C_label, D, H, W) or (D, H, W)
-                prd_to_plot = utils.from_torch(preds[0])  # (C_out, D, H, W) or (D, H, W)
+            if batch_idx == 0 and iterations % 10 == 0:
+                img_to_plot = utils.from_torch(images[0])
+                lbl_to_plot = utils.from_torch(labels[0])
+                prd_to_plot = utils.from_torch(preds[0]) 
 
-                # Remove channel dim if it's 1, otherwise take the first channel
-                if img_to_plot.ndim == 4: # C, D, H, W
-                    img_to_plot = img_to_plot[0] # D, H, W
+                if img_to_plot.ndim == 4:
+                    img_to_plot = img_to_plot[0]
                 if lbl_to_plot.ndim == 4:
                     lbl_to_plot = lbl_to_plot[0]
                 if prd_to_plot.ndim == 4:
                     prd_to_plot = prd_to_plot[0]
                 
-                # Ensure they are 3D
                 if not (img_to_plot.ndim == 3 and lbl_to_plot.ndim == 3 and prd_to_plot.ndim == 3):
                     print(f"Skipping plotting for iteration {iterations}, batch {batch_idx} due to unexpected dimensions.")
                     print(f"Image shape: {img_to_plot.shape}, Label shape: {lbl_to_plot.shape}, Pred shape: {prd_to_plot.shape}")
@@ -154,37 +152,63 @@ class TrainingEpoch(object):
                 ]
 
                 for i, (data_vol, title_prefix, cmap) in enumerate(data_to_plot):
-                    # X slice (min along axis 0 - Depth)
                     slice_x = np.min(data_vol, axis=0)
-                    im_x = axes[i, 0].imshow(slice_x.T, cmap=cmap, origin='lower') # Transpose for consistent view with Y,Z
+                    im_x = axes[i, 0].imshow(slice_x.T, cmap=cmap, origin='lower')
                     axes[i, 0].set_title(f"{title_prefix} (Y-Z projection)")
                     fig.colorbar(im_x, ax=axes[i, 0], orientation='horizontal', fraction=0.046, pad=0.04)
                     axes[i, 0].axis('off')
 
-                    # Y slice (min along axis 1 - Height)
                     slice_y = np.min(data_vol, axis=1)
-                    im_y = axes[i, 1].imshow(slice_y.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Z
+                    im_y = axes[i, 1].imshow(slice_y.T, cmap=cmap, origin='lower')
                     axes[i, 1].set_title(f"{title_prefix} (X-Z projection)")
                     fig.colorbar(im_y, ax=axes[i, 1], orientation='horizontal', fraction=0.046, pad=0.04)
                     axes[i, 1].axis('off')
 
-                    # Z slice (min along axis 2 - Width)
                     slice_z = np.min(data_vol, axis=2)
                     im_z = axes[i, 2].imshow(slice_z.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Y
                     axes[i, 2].set_title(f"{title_prefix} (X-Y projection)")
                     fig.colorbar(im_z, ax=axes[i, 2], orientation='horizontal', fraction=0.046, pad=0.04)
                     axes[i, 2].axis('off')
                 
-                plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust layout to make space for suptitle
+                plt.tight_layout(rect=[0, 0.03, 1, 0.95])
                 
-                # Save or show the plot
                 plot_filename = os.path.join("./trainplot/", f"plot_iter_{iterations}_batch_{batch_idx}.png")
                 plt.savefig(plot_filename)
                 plt.close(fig)
                 logger.info(f"Saved visualization to {plot_filename}")
 
         return {"loss": float(mean_loss/len(self.dataloader))}
+
+def show_slices(distance_map, graph):
+    """Show orthogonal slices through the distance map"""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
+    xx = np.min(distance_map, axis=0)
+    yy = np.min(distance_map, axis=1)
+    zz = np.min(distance_map, axis=2)
+    
+    im0 = axes[0].imshow(xx.T, cmap='coolwarm')
+    axes[0].set_title('Slice (X)')
+    fig.colorbar(im0, ax=axes[0])
+    
+    im1 = axes[1].imshow(yy.T, cmap='coolwarm')
+    axes[1].set_title('Slice (Y)')
+    fig.colorbar(im1, ax=axes[1])
+    
+    im2 = axes[2].imshow(zz.T, cmap='coolwarm')
+    axes[2].set_title('Slice (Z)')
+    fig.colorbar(im2, ax=axes[2])
+
+    for edge in graph.edges:
+        node1, node2 = edge
+        x1, y1, z1 = graph.nodes[node1]['pos']
+        x2, y2, z2 = graph.nodes[node2]['pos']
+        
+        axes[0].plot([y1, y2], [z1, z2], 'r-')
+        axes[1].plot([x1, x2], [z1, z2], 'r-')
+        axes[2].plot([x1, x2], [y1, y2], 'r-')
+    
+    plt.show() 
     
 class Validation(object):
 
@@ -199,13 +223,16 @@ class Validation(object):
         self.bestcomp = 0
         self.bestcorr = 0
 
+        utils.mkdir("./val_plot/")
+
     def __call__(self, iteration, network, loss_function):
 
         losses = []
-        preds = []
+        preds_collector = []
         scores = {"corr":[], "comp":[], "qual":[]}
 
         drive_output_path = "/content/drive/MyDrive/snake_model_outputs"
+        plot_save_path = "./val_plot/"
 
         network.train(False)
         with utils.torch_no_grad:
@@ -224,23 +251,61 @@ class Validation(object):
                 loss_v = float(utils.from_torch(loss))
                 losses.append(loss_v)
 
-                pred_np = utils.from_torch(pred)[0]
-                preds.append(pred_np)
-                label_np = utils.from_torch(label)[0]
+                pred_np_item = utils.from_torch(pred.cpu())[0]
+                label_np_item = utils.from_torch(label.cpu())[0]
+                image_np_item = utils.from_torch(image.cpu())[0]
                 
-                pred_mask = skeletonize_3d((pred_np < 5)[0])//255
-                label_mask = (label_np==0)
+                preds_collector.append(pred_np_item)
+                
+                pred_mask_item = skeletonize_3d((pred_np_item[0] < 5))//255
+                label_object_mask_item = (label_np_item[0] == 0)
+                label_skeleton_item = skeletonize_3d(label_object_mask_item)//255
 
-                corr, comp, qual = correctness_completeness_quality(pred_mask, label_mask, slack=3)
+                corr, comp, qual = correctness_completeness_quality(pred_mask_item, label_object_mask_item, slack=3)
                 
                 scores["corr"].append(corr)
                 scores["comp"].append(comp)
                 scores["qual"].append(qual)
                 
-                # save the prediction here
-                output_valid = os.path.join(self.output_path, "output_valid")
-                utils.mkdir(output_valid)
-                np.save(os.path.join(output_valid, "pred_{:06d}_final.npy".format(i,iteration)), pred_np)
+                fig, axes = plt.subplots(3, 3, figsize=(15, 16))
+                fig.suptitle(f"Validation: Iteration {iteration} - Sample {i}\nLoss: {loss_v:.4f} | Qual: {qual:.3f}", fontsize=14)
+
+                plot_data_config = [
+                    (image_np_item[0], "Input Image", 'gray', None),
+                    (label_np_item[0], "Label", 'viridis', label_skeleton_item),
+                    (pred_np_item[0], "Prediction", 'viridis', pred_mask_item)
+                ]
+                
+                projection_titles = ["(Y-Z Projection)", "(X-Z Projection)", "(X-Y Projection)"]
+                projection_axes = [0, 1, 2]
+
+                for row_idx, (data_vol, title_prefix, cmap, skeleton_vol) in enumerate(plot_data_config):
+                    for col_idx, proj_axis in enumerate(projection_axes):
+                        ax = axes[row_idx, col_idx]
+                        
+                        slice_proj = np.min(data_vol, axis=proj_axis)
+                        im = ax.imshow(slice_proj.T, cmap=cmap, origin='lower', aspect='auto')
+                        
+                        plot_title = f"{title_prefix} {projection_titles[col_idx]}"
+                        if skeleton_vol is not None:
+                            skeleton_slice_proj = np.max(skeleton_vol, axis=proj_axis) 
+                            ax.contour(skeleton_slice_proj.T, colors='red', linewidths=0.8, levels=[0.5], origin='lower')
+                            plot_title += " + Skel"
+
+                        ax.set_title(plot_title, fontsize=10)
+                        ax.axis('off')
+                        fig.colorbar(im, ax=ax, orientation='horizontal', fraction=0.046, pad=0.08)
+
+                plt.tight_layout(rect=[0, 0.03, 1, 0.93])
+                
+                plot_filename = os.path.join(plot_save_path, f"val_plot_iter_{iteration}_sample_{i}.png")
+                plt.savefig(plot_filename)
+                plt.close(fig)
+                # logger.info(f"Saved validation visualization to {plot_filename}")
+
+                output_valid_dir = os.path.join(self.output_path, "output_valid_predictions")
+                utils.mkdir(output_valid_dir)
+                np.save(os.path.join(output_valid_dir, "pred_iter{:04d}_sample{:03d}.npy".format(iteration, i)), pred_np_item)
 
         scores["qual"] = np.nan_to_num(scores["qual"])
         
@@ -251,7 +316,7 @@ class Validation(object):
         if self.bestqual < qual_total:
             self.bestqual = qual_total
             for i in range(len(self.dataloader_val)):
-                np.save(os.path.join(output_valid, "pred_{:06d}_bestqual.npy".format(i,iteration)), preds[i])
+                np.save(os.path.join(output_valid_dir, "pred_{:06d}_bestqual.npy".format(i,iteration)), preds_collector[i])
             utils.torch_save(os.path.join(self.output_path, "network_bestqual.pickle"),
                              network.state_dict())
         
