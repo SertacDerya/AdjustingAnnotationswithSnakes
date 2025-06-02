@@ -2,6 +2,9 @@ from .snake import Snake
 import torch
 import torch.nn.functional as F
 import math
+from .cropGraph import cropGraph_dontCutEdges
+from .renderDistanceMap import getCropCoords
+
 
 def cmptExtGrad(snakepos,eGradIm):
     # returns the values of eGradIm at positions snakepos
@@ -246,7 +249,6 @@ class RibbonSnake(Snake):
                  r0_exp = r0_v.unsqueeze(0)
                  r1_exp = r1_v.unsqueeze(0)
                  interp_radius = r0_exp * (1.0 - frac) + r1_exp * frac
-                 dist_sq_capsule = dist_axis_sq - interp_radius**2
                  dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=eps))
                  signed_dist_capsule = dist_axis - interp_radius
                  min_dist_capsule, _ = signed_dist_capsule.min(dim=1)
@@ -269,3 +271,157 @@ class RibbonSnake(Snake):
 
         dist_clamped = torch.clamp(min_dist, max=max_dist)
         return dist_clamped.reshape(*size)
+    
+    def render_distance_map_with_widths_cropped(self, size, cropsz, max_dist=16.0, max_edge_len=None):
+        """
+        Unified 2D/3D signed distance map for the ribbon snake using graph structure,
+        rendered in crops to manage memory.
+
+        Args:
+            size (tuple): (W, H) for 2D or (X, Y, Z) for 3D grid dimensions of the full map.
+            cropsz (tuple): (cW, cH) or (cX, cY, cZ) for crop dimensions.
+            max_dist (float): Maximum distance value to clamp to.
+            max_edge_len (float, optional): Maximum expected edge length in the graph.
+                                            Used to refine margin calculation for graph cropping.
+
+        Returns:
+            torch.Tensor: Signed distance map of shape `size`. Negative inside,
+                          zero on surface, positive outside up to max_dist.
+        """
+        device = self.s.device
+        full_centers = self.s
+        full_radii = (self.w.flatten() / 2.0) # widths divided by 2
+        eps = 1e-8
+
+        if full_centers.numel() == 0 or full_radii.numel() == 0 or not self.h or len(self.h.nodes) == 0:
+            print("Warning: Rendering distance map for empty snake.")
+            return torch.full(size, max_dist, device=device, dtype=full_centers.dtype)
+
+        if full_centers.shape[0] != full_radii.shape[0]:
+             raise ValueError(f"Mismatch between center points ({full_centers.shape[0]}) and radii ({full_radii.shape[0]})")
+
+        output_dist_map = torch.full(size, max_dist, device=device, dtype=full_centers.dtype)
+        max_r_snake = full_radii.max().item() if full_radii.numel() > 0 else 0.0
+        
+        margin_for_graph = max_dist + max_r_snake
+        if max_edge_len is not None and max_edge_len > 0:
+            margin_for_graph = (margin_for_graph + 0.5 * max_edge_len) / (2.0**0.5)
+        
+        margin_for_graph = max(margin_for_graph, 0)
+
+        graph_crop_slices_list = getCropCoords(size, cropsz, margin_for_graph)
+        distmap_crop_slices_list = getCropCoords(size, cropsz, 0)
+
+        for g_slices, d_slices in zip(graph_crop_slices_list, distmap_crop_slices_list):
+            current_crop_size_tuple = tuple(s.stop - s.start for s in d_slices)
+            if any(cs <= 0 for cs in current_crop_size_tuple):
+                continue
+            cropped_graph = cropGraph_dontCutEdges(self.h, g_slices)
+
+
+            if not cropped_graph or not cropped_graph.nodes:
+                continue
+
+            crop_axes = [torch.arange(s.start, s.stop, device=device, dtype=torch.float32) for s in d_slices]
+            if any(len(ax) == 0 for ax in crop_axes):
+                continue
+            
+            mesh = torch.meshgrid(*crop_axes, indexing='ij')
+            points_crop = torch.stack([m.flatten() for m in mesh], dim=1)
+            num_points_crop = points_crop.shape[0]
+
+            if num_points_crop == 0:
+                continue
+
+            min_dist_for_crop = torch.full((num_points_crop,), max_dist, device=device, dtype=full_centers.dtype)
+            
+            P_exp_crop = points_crop.unsqueeze(1)
+
+            if len(cropped_graph.edges) > 0:
+                edge_indices_list_c = []
+                try:
+                    for u_name, v_name in cropped_graph.edges:
+                        if u_name in self.n2i and v_name in self.n2i:
+                            edge_indices_list_c.append((self.n2i[u_name], self.n2i[v_name]))
+                        else:
+                            print(f"Warning: Node {u_name} or {v_name} from cropped_graph edge not in self.n2i. Skipping edge.")
+                except KeyError as e:
+                    raise RuntimeError(f"Node ID {e} from graph edges not found in n2i mapping.")
+
+                if edge_indices_list_c:
+                    edge_indices_c = torch.tensor(edge_indices_list_c, device=device, dtype=torch.long)
+                    
+                    starts_c = full_centers[edge_indices_c[:, 0]]
+                    ends_c   = full_centers[edge_indices_c[:, 1]]  
+                    r0_c     = full_radii[edge_indices_c[:, 0]]  
+                    r1_c     = full_radii[edge_indices_c[:, 1]]  
+
+                    vec_c = ends_c - starts_c
+                    L_sq_c = (vec_c**2).sum(dim=1)
+                    valid_edge_mask_c = L_sq_c > eps**2
+
+                    if torch.any(valid_edge_mask_c):
+                        starts_v = starts_c[valid_edge_mask_c]
+                        r0_v = r0_c[valid_edge_mask_c]
+                        r1_v = r1_c[valid_edge_mask_c]
+                        vec_v = vec_c[valid_edge_mask_c]
+                        
+                        L_v = torch.sqrt((vec_v**2).sum(dim=1) + eps)
+                        D_v = vec_v / (L_v.unsqueeze(1) + eps)     
+                    
+                        S_exp = starts_v.unsqueeze(0)
+                        D_exp = D_v.unsqueeze(0)     
+                        L_exp = L_v.unsqueeze(0)     
+                    
+                        v_point_start = P_exp_crop - S_exp                  
+                        proj = (v_point_start * D_exp).sum(dim=2)           
+                        t = torch.clamp(proj, min=torch.tensor(eps, device=device), max=L_exp)           
+
+                        closest_on_axis = S_exp + D_exp * t.unsqueeze(-1)   
+                        dist_axis_sq = ((P_exp_crop - closest_on_axis)**2).sum(dim=2)
+                        dist_axis = torch.sqrt(torch.clamp(dist_axis_sq, min=torch.tensor(eps,device=device)))   
+                        
+                        frac = t / torch.clamp(L_exp, min=torch.tensor(eps,device=device))              
+                        r0_exp = r0_v.unsqueeze(0)                          
+                        r1_exp = r1_v.unsqueeze(0)                          
+                        interp_radius = r0_exp * (1.0 - frac) + r1_exp * frac
+                        
+                        signed_dist_capsule = dist_axis - interp_radius     
+                        
+                        if signed_dist_capsule.numel() > 0:
+                            min_dist_capsule, _ = signed_dist_capsule.min(dim=1)
+                            min_dist_for_crop = torch.minimum(min_dist_for_crop, min_dist_capsule)
+
+            node_indices_list_c = []
+            try:
+                for node_name in cropped_graph.nodes:
+                    if node_name in self.n2i:
+                        node_indices_list_c.append(self.n2i[node_name])
+                    else:
+                        print(f"Warning: Node {node_name} from cropped_graph.nodes not in self.n2i. Skipping for sphere.")
+            except KeyError as e:
+                 raise RuntimeError(f"Node ID {e} from graph nodes not found in n2i mapping.")
+
+            if node_indices_list_c:
+                node_indices_c = torch.tensor(node_indices_list_c, device=device, dtype=torch.long)
+            
+                current_centers_c = full_centers[node_indices_c]
+                current_radii_c = full_radii[node_indices_c]    
+
+                if current_centers_c.numel() > 0:
+                    C_exp = current_centers_c.unsqueeze(0)
+                    R_exp = current_radii_c.unsqueeze(0)  
+                
+                    dist_to_centers_sq = ((P_exp_crop - C_exp)**2).sum(dim=2)
+                    dist_to_centers = torch.sqrt(torch.clamp(dist_to_centers_sq, min=torch.tensor(eps,device=device)))
+
+                    signed_dist_sphere = dist_to_centers - R_exp         
+                    
+                    if signed_dist_sphere.numel() > 0:
+                        min_dist_sphere, _ = signed_dist_sphere.min(dim=1)   
+                        min_dist_for_crop = torch.minimum(min_dist_for_crop, min_dist_sphere)
+        
+            dist_clamped_crop = torch.clamp(min_dist_for_crop, max=max_dist)
+            output_dist_map[d_slices] = dist_clamped_crop.reshape(*current_crop_size_tuple)
+
+        return output_dist_map
