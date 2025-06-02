@@ -41,8 +41,8 @@ class RibbonSnake(Snake):
         # Normal initialization of Snake super class
         super().__init__(graph, crop, stepsz, alpha, beta, dim)
         # Additionally we sample from a normal distrubution for widths of nodes
-        #self.w = torch.ones(self.s.shape[0]) * 8.0
-        self.w = torch.randint(low=2, high=10, size=(self.s.shape[0],), dtype=torch.float32)
+        self.w = torch.ones(self.s.shape[0]) * 8.0
+        #self.w = torch.randint(low=2, high=10, size=(self.s.shape[0],), dtype=torch.float32)
 
     def cuda(self):
         super().cuda()

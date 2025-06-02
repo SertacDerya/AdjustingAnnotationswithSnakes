@@ -198,7 +198,7 @@ class TrainingEpoch(object):
             loss_v = loss.item()
 
             # Plotting (first batch of every 10th iteration)
-            if iterations % 10 == 0:
+            if iterations % 10 == 0 and iterations >= self.ours_start:
                 try:
                     img_np = utils.from_torch(images[0].cpu()) 
                 
