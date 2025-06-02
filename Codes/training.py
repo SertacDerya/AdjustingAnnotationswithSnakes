@@ -202,7 +202,7 @@ class TrainingEpoch(object):
                     axes[2].axis('off')
 
                     plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make space for suptitle
-                    plot_filename = os.path.join("./trainplot/", f"epoch_{iterations}_batch_visualization.png")
+                    plot_filename = os.path.join("./trainplot/", f"epoch_{iterations}_batch_visualization_{idx}.png")
                     plt.savefig(plot_filename)
                     plt.close(fig)
                     logger.info(f"Saved visualization to {plot_filename}")
