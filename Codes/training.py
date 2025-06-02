@@ -10,6 +10,89 @@ import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
+def plot_ribbon_snake(
+        ax,
+        snake,
+        crop_slices=None,
+        face_color="cyan",
+        face_alpha=0.35,
+        edge_color="magenta",
+        node_color="blue",
+        node_size=10,
+):
+    if snake is None or snake.s is None or snake.s.numel() == 0:
+        return
+
+    ctrs = snake.s.detach().cpu().float().numpy()
+    widths = snake.w.detach().cpu().float().numpy().ravel()
+
+    if snake.ndims != 2:
+        # logger.warning("plot_ribbon_snake currently only supports 2D snakes for full ribbon. Plotting nodes only.")
+        # Optionally plot 3D nodes projected to 2D plane if desired (e.g. ctrs[:,1], ctrs[:,0] for x,y)
+        if ctrs.shape[1] >=2: # Check if at least 2D coordinates exist
+             ax.scatter(ctrs[:, 1], ctrs[:, 0], c=node_color, s=node_size, zorder=5, alpha=0.9, marker='x')
+        return
+    
+    K = ctrs.shape[0]
+    if K == 0 : return
+    if K == 1: # Plot single node as a circle with its width
+        # Calculate radius from width for plotting
+        radius_px = widths[0] / 2.0 
+        # For scatter, 's' is proportional to area, so (pi*r^2). Or simply scale node_size by width.
+        # Here, let's just make size proportional to width for simplicity.
+        ax.scatter(ctrs[0, 1], ctrs[0, 0], c=node_color, s=node_size * (widths[0] if widths[0]>0 else 1), zorder=5, alpha=0.9)
+        return
+    
+    G = snake.getGraph()
+    if G is None: return
+
+    for u_name, v_name in G.edges():
+        if u_name not in snake.n2i or v_name not in snake.n2i:
+            logger.debug(f"Node {u_name} or {v_name} not in snake.n2i during plotting. Skipping edge.")
+            continue
+        iu, iv = snake.n2i[u_name], snake.n2i[v_name]
+
+        if not (iu < K and iv < K): continue
+
+        cu, cv = ctrs[iu], ctrs[iv]
+        wu, wv = widths[iu], widths[iv]
+
+        if not (np.isfinite(wu) and np.isfinite(wv) and wu > 0 and wv > 0):
+            continue
+
+        edge_vec = cv - cu
+        edge_len = np.linalg.norm(edge_vec)
+        if edge_len < 1e-8: continue
+        
+        edge_tangent = edge_vec / edge_len
+        edge_normal = np.array([-edge_tangent[1], edge_tangent[0]])
+
+        # Define quad vertices in (y,x)
+        # Order: start_left, end_left, end_right, start_right (A, B, C, D)
+        quad_coords_yx = np.array([
+            cu - edge_normal * wu * 0.5,  # A
+            cv - edge_normal * wv * 0.5,  # B
+            cv + edge_normal * wv * 0.5,  # C
+            cu + edge_normal * wu * 0.5   # D
+        ])
+        
+        if not np.all(np.isfinite(quad_coords_yx)): continue
+            
+        # Convert to (x,y) for plt.Polygon
+        quad_coords_xy = quad_coords_yx[:, ::-1] 
+
+        patch = plt.Polygon(quad_coords_xy, closed=True,
+                            facecolor=face_color, alpha=face_alpha,
+                            edgecolor=None) # Use None or a specific color for edge
+        ax.add_patch(patch)
+
+        ax.plot([cu[1], cv[1]], [cu[0], cv[0]],
+                color=edge_color, linewidth=0.8, alpha=0.7)
+
+    ax.scatter(ctrs[:, 1], ctrs[:, 0],
+               c=node_color, s=node_size, zorder=5, alpha=0.9)
+
+
 class Trainer(object):
 
     def __init__(self,training_step, validation=None, valid_every=None,
@@ -87,160 +170,98 @@ class Trainer(object):
                     logger.info("Saving time: {:.2f}s".format(time.time()-start_saving))
 
 class TrainingEpoch(object):
-
-    def __init__(self, dataloader, ours=False, ours_start=0):
-
+    def __init__(self, dataloader, ours=False, ours_start=0): # ours_loss_config can be a dict
         self.dataloader = dataloader
         self.ours = ours
         self.ours_start = ours_start
-        utils.mkdir("./trainplot/")
+        self.plot_dir = "./trainplot/"
+        utils.mkdir(self.plot_dir)
 
     def __call__(self, iterations, network, optimizer, lr_scheduler, base_loss, our_loss):
-        
-        mean_loss = 0
+
+        mean_loss = 0.0
+        num_valid_batches = 0
+        network.train() 
         for idx, (images, labels, masks, graphs, slices) in enumerate(self.dataloader):
 
             images = images.cuda()
             labels = labels.cuda()
-            masks = masks.cuda()
             
             preds = network(images.contiguous())
-            # apply the mask. might create confusion for the unet
-            #binary_mask = (masks == 0).float() 
-            #preds = preds * binary_mask
-            snake = None
+            snake_for_plotting = None
+
             if self.ours and iterations >= self.ours_start:
-            # calls forward on loss here, and snake is adjusted
-                loss, snake = our_loss(preds, graphs, slices, iterations)
+                loss, snake_for_plotting, dmap = our_loss(preds, graphs, slices, iterations)
             else:
                 loss = base_loss(preds, labels)
-
-            if iterations % 50 == 0:
-                # Plot and save the first image, label, and prediction of the first batch
-                try:
-                    img_to_plot_orig = utils.from_torch(images[0]/255.0) # (C, H, W)
-                    lbl_to_plot = utils.from_torch(labels[0]) # (C_label, H, W)
-                    prd_to_plot = utils.from_torch(preds[0])  # (C_out, H, W)
-
-                    # Prepare for plotting (e.g., select first channel, transpose if necessary)
-                    img_to_plot = img_to_plot_orig.copy()
-                    if img_to_plot.shape[0] > 1: # More than one channel
-                        if img_to_plot.shape[0] == 3: # RGB
-                             img_to_plot = img_to_plot.transpose(1, 2, 0) # H, W, C
-                        else: # Grayscale with multiple channels, take first
-                            img_to_plot = img_to_plot[0] # H, W
-                    else: # Single channel
-                        img_to_plot = img_to_plot.squeeze(0) # H, W
-                    
-                    lbl_to_plot = lbl_to_plot.squeeze(0) # H, W (assuming single channel label)
-                    prd_to_plot = prd_to_plot.squeeze(0) # H, W (assuming single channel prediction or taking first)
-
-                    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-                    fig.suptitle(f"Epoch {iterations} - Batch")
-
-                    # Plot Input Image (with potential snake overlay)
-                    axes[0].imshow(img_to_plot, cmap='gray' if img_to_plot.ndim == 2 else None)
-                    axes[0].set_title("Input Image")
-                    if snake and hasattr(snake, 's') and hasattr(snake, 'w') and \
-                       hasattr(snake, 'h') and hasattr(snake, 'n2i') and \
-                       hasattr(snake, '_compute_normals') and hasattr(snake, 'ndims'):
-                        
-                        axes[0].set_title("Input Image + Snake Overlay")
-                        snake_disp_graph = snake.getGraph() # Gets graph with nodes on CPU
-                        for u, v in snake_disp_graph.edges():
-                            pos_u = snake_disp_graph.nodes[u]['pos']
-                            pos_v = snake_disp_graph.nodes[v]['pos']
-                            axes[0].plot([-pos_u[0], -pos_v[0]], [pos_u[1], pos_v[1]], 'magenta', linewidth=1.2)
-
-                        s_cpu = snake.s.detach().cpu()
-                        w_cpu = snake.w.detach().cpu() / 2.0 # half-widths
-                        
-                        current_normals_tuple = snake._compute_normals(snake.s) # snake.s is on device
-                        normals_at_nodes_cpu = None
-                        if snake.ndims == 2:
-                            normals_at_nodes_cpu = current_normals_tuple[0].detach().cpu()
-                        elif snake.ndims == 3: # For 3D, use the first normal component (n1)
-                            normals_at_nodes_cpu = current_normals_tuple[0].detach().cpu()
-
-                        if normals_at_nodes_cpu is not None:
-                            node_to_idx = snake.n2i
-                            for u_node_id, v_node_id in snake.h.edges(): # snake.h is internal graph
-                                if u_node_id in node_to_idx and v_node_id in node_to_idx:
-                                    u_idx = node_to_idx[u_node_id]
-                                    v_idx = node_to_idx[v_node_id]
-
-                                    pos_u_tensor = s_cpu[u_idx]
-                                    pos_v_tensor = s_cpu[v_idx]
-                                    width_u_val = w_cpu[u_idx]
-                                    width_v_val = w_cpu[v_idx]
-                                    
-                                    original_normal_u_vec = normals_at_nodes_cpu[u_idx].numpy()
-                                    original_normal_v_vec = normals_at_nodes_cpu[v_idx].numpy()
-
-                                    # Rotate normal vector 90-deg CCW: (ny,nx) -> (-nx,ny)
-                                    # original_normal_u_vec[0] is ny, original_normal_u_vec[1] is nx
-                                    corrected_normal_u_vec = np.array([-original_normal_u_vec[1], original_normal_u_vec[0]])
-                                    corrected_normal_v_vec = np.array([-original_normal_v_vec[1], original_normal_v_vec[0]])
-
-                                    # Calculate width points with corrected normals
-                                    # pos_u_tensor is (y,x). corrected_normal_u_vec is (new_ny, new_nx)
-                                    p_Lu = (pos_u_tensor.numpy() - width_u_val.item() * corrected_normal_u_vec)
-                                    p_Ru = (pos_u_tensor.numpy() + width_u_val.item() * corrected_normal_u_vec)
-                                    p_Lv = (pos_v_tensor.numpy() - width_v_val.item() * corrected_normal_v_vec)
-                                    p_Rv = (pos_v_tensor.numpy() + width_v_val.item() * corrected_normal_v_vec)
-                                    
-                                    # Plot using [1] for x, [0] for y after CCW rotation
-                                    # p_Lu is (y,x). Rotated plot x is -p_Lu[0], y is p_Lu[1]
-                                    axes[0].plot([-p_Lu[0], -p_Lv[0]], [p_Lu[1], p_Lv[1]], color='cyan', linewidth=1.5)
-                                    axes[0].plot([-p_Ru[0], -p_Rv[0]], [p_Ru[1], p_Rv[1]], color='cyan', linewidth=1.5)
-                    
-                    # Ensure colorbar is associated with the image, not potentially overwritten by snake plots
-                    if axes[0].images: # Check if an image was plotted
-                        fig.colorbar(axes[0].images[0], ax=axes[0]) 
-                    
-                    fig.colorbar(axes[0].images[0], ax=axes[0]) # Add colorbar for the image
-                    axes[0].axis('off')
-
-                    # plot ground-truth label
-                    im1 = axes[1].imshow(lbl_to_plot, cmap='viridis')
-                    fig.colorbar(im1, ax=axes[1])
-                    axes[1].set_title("Ground Truth Label")
-                    axes[1].axis('off')
-
-                    # plot network prediction
-                    im2 = axes[2].imshow(prd_to_plot, cmap='viridis')
-                    fig.colorbar(im2, ax=axes[2])
-                    axes[2].set_title("Network Prediction")
-                    axes[2].axis('off')
-
-                    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make space for suptitle
-                    plot_filename = os.path.join("./trainplot/", f"epoch_{iterations}_batch_visualization_{idx}.png")
-                    plt.savefig(plot_filename)
-                    plt.close(fig)
-                    logger.info(f"Saved visualization to {plot_filename}")
-                except Exception as e:
-                    logger.error(f"Error during plotting/saving visualization: {e}")
-                
-            loss_v = float(utils.from_torch(loss))
-
-            if np.isnan(loss_v) or np.isinf(loss_v):
-                return {"loss": loss_v,
-                        "pred": utils.from_torch(preds),
-                        "labels": utils.from_torch(labels)}
             
-            mean_loss += loss_v
+            loss_v = loss.item()
+
+            # Plotting (first batch of every 10th iteration)
+            if iterations % 10 == 0:
+                try:
+                    img_np = utils.from_torch(images[0].cpu()) 
+                
+                    if img_np.max() > 1.0 and img_np.min() >=0: img_np = img_np / 255.0
+                    
+                    lbl_np = utils.from_torch(labels[0].cpu())
+                    prd_np = utils.from_torch(preds[0].cpu())
+
+                    dmap_np = utils.from_torch(dmap[0].cpu())
+                
+                    if img_np.shape[0] == 3: img_np = img_np.transpose(1,2,0)
+                    elif img_np.shape[0] == 1: img_np = img_np.squeeze(0)
+
+                    lbl_np = lbl_np.squeeze(0) if lbl_np.ndim == 3 and lbl_np.shape[0]==1 else lbl_np
+                
+                    prd_np = prd_np.squeeze(0) if prd_np.ndim == 3 and prd_np.shape[0]==1 else prd_np
+
+                    fig, axes = plt.subplots(2, 2, figsize=(12,12))
+                    fig.suptitle(f"Train - Epoch {iterations} - Batch {idx} (Loss: {loss_v:.4f})")
+
+                    axes[0][0].imshow(img_np, cmap="gray" if img_np.ndim==2 else None)
+                    axes[0][0].set_title("Input + Snake")
+                    if snake_for_plotting:
+                        plot_ribbon_snake(axes[0][0], snake_for_plotting, 
+                                          crop_slices=slices[0] if slices and len(slices) > 0 else None)
+                    axes[0][0].axis("off")
+
+                    im1 = axes[0][1].imshow(lbl_np, cmap="viridis")
+                    axes[0][1].set_title("GT Label + Snake")
+                    fig.colorbar(im1, ax=axes[0][1])
+                    if snake_for_plotting:
+                         plot_ribbon_snake(axes[0][1], snake_for_plotting,
+                                          crop_slices=slices[0] if slices and len(slices) > 0 else None)
+                    axes[0][1].axis("off")
+
+                    im2 = axes[1][0].imshow(prd_np, cmap='viridis')
+                    axes[1][0].set_title("Prediction")
+                    fig.colorbar(im2, ax=axes[1][0])
+                    axes[1][0].axis('off')
+
+                    im3 = axes[1][1].imshow(dmap_np, cmap='viridis')
+                    axes[1][1].set_title("Distance Map")
+                    fig.colorbar(im3, ax=axes[1][1])
+                    axes[1][1].axis('off')
+
+                    plt.tight_layout(rect=[0, 0, 1, 0.96])
+                    plt.savefig(os.path.join(self.plot_dir, f"epoch_{iterations}_batch_{idx}_train_vis.png"))
+                    plt.close(fig)
+                except Exception as e:
+                    logger.error(f"Plotting error iter {iterations}, batch {idx}: {e}", exc_info=True)
+
             optimizer.zero_grad()
             loss.backward()
-            # optimizer optimizes the network parameters
             optimizer.step()
+            mean_loss += loss_v
+            num_valid_batches +=1
+
 
             if lr_scheduler is not None:
-                lr_scheduler.step()
+                lr_scheduler.step() 
 
-            if torch.cuda.is_available() and iterations % 10 == 0:
-                torch.cuda.empty_cache()
-
-        return {"loss": float(mean_loss/len(self.dataloader))}
+        avg_loss = mean_loss / num_valid_batches if num_valid_batches > 0 else float('nan')
+        return {"loss": float(avg_loss)}
     
     
 class Validation(object):
@@ -300,7 +321,7 @@ class Validation(object):
                 pred_np_for_skeleton = pred_np[0] if pred_np.ndim == 3 else pred_np
                 label_np_for_skeleton = label_np[0] if label_np.ndim == 3 else label_np
 
-                pred_mask_skeleton = skeletonize(pred_np_for_skeleton <= 5) # No division by 255 needed for boolean
+                pred_mask_skeleton = skeletonize(pred_np_for_skeleton <= 0) # No division by 255 needed for boolean
                 label_mask_skeleton = (label_np_for_skeleton == 0)
 
                 corr, comp, qual = correctness_completeness_quality(pred_mask_skeleton, label_mask_skeleton, slack=3)

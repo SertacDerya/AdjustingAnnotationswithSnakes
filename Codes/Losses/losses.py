@@ -43,7 +43,7 @@ class MAELoss(nn.Module):
 
 class SnakeFastLoss(nn.Module):
     def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps, nsteps_width,
-                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=0.5,
+                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=0.5, enhancement_factor= 4.0,
                  vis_seed=42, vis_sample_index=0):
         super(SnakeFastLoss, self).__init__()
         self.stepsz = stepsz
@@ -65,7 +65,7 @@ class SnakeFastLoss(nn.Module):
         self.iscuda = False
 
         self.negative_weight = negative_weight
-        self.enhancement_factor = 4.0
+        self.enhancement_factor = enhancement_factor
         
         self.visualize_maps = True
         self.vis_dir = 'snake_visualizations'
@@ -98,6 +98,7 @@ class SnakeFastLoss(nn.Module):
         gimgW *= self.extgradfac
         snake_dmap = []
         optimized_graphs = [None] * len(lbl_graphs)
+        s_for_plotting = None
 
         for i, lg in enumerate(zip(lbl_graphs, gimg, gimgW)):
             # i is index num
@@ -119,6 +120,9 @@ class SnakeFastLoss(nn.Module):
             if self.slow_start < epoch:
                 s.optim(self.nsteps, self.nsteps_width)
 
+            if i == 0: # If this is the first graph in the batch
+                s_for_plotting = s 
+        
             optimized_graphs[i] = s.getGraph()
 
             dmap = s.render_distance_map_with_widths_cropped(g[0].shape, self.cropsz, self.dmax, self.maxedgelen)
@@ -182,8 +186,8 @@ class SnakeFastLoss(nn.Module):
             print(f"Loss: {loss.item():.4f}")
             print("=" * 50) """
         
-        self.snake = s
-        return loss, s
+        self.snake = s_for_plotting
+        return loss, s_for_plotting, snake_dmap
 
     def visualize_distance_maps(self, pred_dmap, snake_dm, current_graph, epoch, sample_idx=None):
         """

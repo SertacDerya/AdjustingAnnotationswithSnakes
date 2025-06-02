@@ -96,9 +96,11 @@ def main(config_file="main.config"):
         maxedgelength = __c__["maxedgelength"]
         extgradfac = __c__["extgradfac"]
         slow_start = __c__["slow_start"]
+        negative_weight= __c__["negative_weight"] 
+        ench_factor= __c__["ench_factor"]
         
         our_loss = SnakeFastLoss(stepsz,alpha,beta,fltrstdev,ndims,nsteps,nsteps_width,
-                                              cropsz,dmax,maxedgelength,extgradfac,slow_start).cuda()
+                                              cropsz,dmax,maxedgelength,extgradfac,slow_start,negative_weight,ench_factor).cuda()
     else:
         our_loss = None
 

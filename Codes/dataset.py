@@ -58,8 +58,8 @@ class DRIVEDataset(Dataset):
         if self.train:
             image, label, mask, slices = crop([image, label,mask], self.cropSize)
         
-        negative_mask = (label == 0)
-        label[negative_mask] = -self.enhancement_factor    
+        #negative_mask = (label == 0)
+        #label[negative_mask] = -self.enhancement_factor    
         label[label>self.th] = self.th
         
         if self.train:

@@ -55,36 +55,81 @@ class RibbonSnake(Snake):
     def get_w(self):
         return self.w
 
-    def _compute_normals(self, pos):
-        """
-        Compute normals (and tangents for 3D) for each center point.
-        Returns:
-         - 2D: (normals,) where normals is (N,2)
-         - 3D: (n1, n2, tangents) each (N,3)
-        """
-        N, d = pos.shape
-        eps = 1e-8
-        t = torch.zeros_like(pos)
-        if N > 1:
-            t[1:-1] = (pos[2:] - pos[:-2]) * 0.5
-            t[0] = pos[1] - pos[0]
-            t[-1] = pos[-1] - pos[-2]
-        t = t / (t.norm(dim=1, keepdim=True) + eps)
+    def _compute_normals(self, pos_tensor): # Renamed pos to pos_tensor to avoid conflict
+        N, d = pos_tensor.shape
+        eps_val = 1e-8 
+        
+        tangents = torch.zeros_like(pos_tensor)
 
-        if self.ndims == 2:
-            normals = torch.stack([-t[:,1], t[:,0]], dim=1)
-            normals = normals / (normals.norm(dim=1, keepdim=True) + eps)
-            return (normals,)
+        if N == 0: # Handle empty snake
+             if d == 2: return (torch.zeros_like(pos_tensor),)
+             else: return (torch.zeros_like(pos_tensor), torch.zeros_like(pos_tensor), torch.zeros_like(pos_tensor))
+
+        for k_idx in range(N):
+            node_name = self.i2n[k_idx]
+            current_node_pos = pos_tensor[k_idx]
+            
+            neighbor_node_names = list(self.h.neighbors(node_name)) # Use graph neighbors
+            
+            t_k = torch.zeros(d, device=pos_tensor.device, dtype=pos_tensor.dtype)
+
+            if len(neighbor_node_names) == 1:
+                neigh_idx = self.n2i[neighbor_node_names[0]]
+                neigh_pos = pos_tensor[neigh_idx]
+                t_k = neigh_pos - current_node_pos
+            elif len(neighbor_node_names) >= 2:
+                neighbor_indices = [self.n2i[name] for name in neighbor_node_names]
+                
+                best_na_pos, best_nb_pos = None, None
+                min_dot_product = float('inf')
+
+                if len(neighbor_indices) == 2:
+                    best_na_pos = pos_tensor[neighbor_indices[0]]
+                    best_nb_pos = pos_tensor[neighbor_indices[1]]
+                else: # Branch point: select two "most collinear" neighbors
+                    for i in range(len(neighbor_indices)):
+                        for j in range(i + 1, len(neighbor_indices)):
+                            ni_pos = pos_tensor[neighbor_indices[i]]
+                            nj_pos = pos_tensor[neighbor_indices[j]]
+                            
+                            vec_p_ni = ni_pos - current_node_pos
+                            vec_p_nj = nj_pos - current_node_pos
+                            
+                            norm_p_ni = vec_p_ni.norm()
+                            norm_p_nj = vec_p_nj.norm()
+
+                            if norm_p_ni > eps_val and norm_p_nj > eps_val:
+                                dot_prod = torch.dot(vec_p_ni / norm_p_ni, vec_p_nj / norm_p_nj)
+                                if dot_prod < min_dot_product:
+                                    min_dot_product = dot_prod
+                                    best_na_pos = ni_pos
+                                    best_nb_pos = nj_pos
+                
+                if best_na_pos is not None and best_nb_pos is not None:
+                    t_k = best_nb_pos - best_na_pos # Tangent along line connecting these two "opposite" neighbors
+            
+            tangents[k_idx] = t_k
+
+        tangent_lengths = tangents.norm(dim=1, keepdim=True)
+        tangents = tangents / (tangent_lengths + eps_val) # Normalize all tangents
+
+        if d == 2:
+            normals_calc = torch.stack([-tangents[:, 1], tangents[:, 0]], dim=1)
+            return (normals_calc,) # Tuple with one element: normals tensor
+        elif d == 3:
+            a = torch.zeros_like(tangents)
+            a[:, 0] = 1.0 
+            parallel_mask = (tangents * a).abs().sum(dim=1) > 0.99 
+            a[parallel_mask, 0] = 0.0
+            a[parallel_mask, 1] = 1.0
+
+            n1 = torch.cross(tangents, a, dim=1)
+            n1 = n1 / (n1.norm(dim=1, keepdim=True) + eps_val)
+            n2 = torch.cross(tangents, n1, dim=1)
+            n2 = n2 / (n2.norm(dim=1, keepdim=True) + eps_val) # Re-normalize for stability
+            return (n1, n2, tangents) # Tuple: n1, n2, tangents
         else:
-            a = torch.zeros_like(pos)
-            a[:] = torch.tensor([1.0, 0.0, 0.0], device=pos.device)
-            mask = (t * a).abs().sum(dim=1) > 0.9
-            a[mask] = torch.tensor([0.0, 1.0, 0.0], device=pos.device)
-            n1 = torch.cross(t, a, dim=1)
-            n1 = n1 / (n1.norm(dim=1, keepdim=True) + eps)
-            n2 = torch.cross(t, n1, dim=1)
-            n2 = n2 / (n2.norm(dim=1, keepdim=True) + eps)
-            return (n1, n2, t)
+            raise ValueError(f"Unsupported dimension for normals: {d}")
         
     def comp_second_deriv(self):
         """

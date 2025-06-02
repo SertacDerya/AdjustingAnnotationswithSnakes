@@ -145,6 +145,7 @@ class Snake():
         self.s = th.from_numpy(s).type(th.float32)
         self.fd= th.from_numpy(fd.astype(np.uint8))>0
         self.n2i=n2i
+        self.i2n = {i: n for n, i in n2i.items()}
     
     def cuda(self):
         self.c =self.c .cuda()
