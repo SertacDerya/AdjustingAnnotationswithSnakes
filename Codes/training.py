@@ -150,8 +150,7 @@ class TrainingEpoch(object):
                         for u, v in snake_disp_graph.edges():
                             pos_u = snake_disp_graph.nodes[u]['pos']
                             pos_v = snake_disp_graph.nodes[v]['pos']
-                            # Assuming pos is (y,x) for 2D to match imshow (row,col)
-                            axes[0].plot([pos_u[1], pos_v[1]], [pos_u[0], pos_v[0]], 'magenta', linewidth=1.2)
+                            axes[0].plot([-pos_u[0], -pos_v[0]], [pos_u[1], pos_v[1]], 'magenta', linewidth=1.2)
 
                         s_cpu = snake.s.detach().cpu()
                         w_cpu = snake.w.detach().cpu() / 2.0 # half-widths
@@ -174,17 +173,30 @@ class TrainingEpoch(object):
                                     pos_v_tensor = s_cpu[v_idx]
                                     width_u_val = w_cpu[u_idx]
                                     width_v_val = w_cpu[v_idx]
-                                    normal_u_vec = normals_at_nodes_cpu[u_idx]
-                                    normal_v_vec = normals_at_nodes_cpu[v_idx]
-
-                                    p_Lu = (pos_u_tensor - width_u_val * normal_u_vec).numpy()
-                                    p_Ru = (pos_u_tensor + width_u_val * normal_u_vec).numpy()
-                                    p_Lv = (pos_v_tensor - width_v_val * normal_v_vec).numpy()
-                                    p_Rv = (pos_v_tensor + width_v_val * normal_v_vec).numpy()
                                     
-                                    # Plot using [1] for x, [0] for y
-                                    axes[0].plot([p_Lu[1], p_Lv[1]], [p_Lu[0], p_Lv[0]], color='cyan', linewidth=1.5)
-                                    axes[0].plot([p_Ru[1], p_Rv[1]], [p_Ru[0], p_Rv[0]], color='cyan', linewidth=1.5)
+                                    original_normal_u_vec = normals_at_nodes_cpu[u_idx].numpy()
+                                    original_normal_v_vec = normals_at_nodes_cpu[v_idx].numpy()
+
+                                    # Rotate normal vector 90-deg CCW: (ny,nx) -> (-nx,ny)
+                                    # original_normal_u_vec[0] is ny, original_normal_u_vec[1] is nx
+                                    corrected_normal_u_vec = np.array([-original_normal_u_vec[1], original_normal_u_vec[0]])
+                                    corrected_normal_v_vec = np.array([-original_normal_v_vec[1], original_normal_v_vec[0]])
+
+                                    # Calculate width points with corrected normals
+                                    # pos_u_tensor is (y,x). corrected_normal_u_vec is (new_ny, new_nx)
+                                    p_Lu = (pos_u_tensor.numpy() - width_u_val.item() * corrected_normal_u_vec)
+                                    p_Ru = (pos_u_tensor.numpy() + width_u_val.item() * corrected_normal_u_vec)
+                                    p_Lv = (pos_v_tensor.numpy() - width_v_val.item() * corrected_normal_v_vec)
+                                    p_Rv = (pos_v_tensor.numpy() + width_v_val.item() * corrected_normal_v_vec)
+                                    
+                                    # Plot using [1] for x, [0] for y after CCW rotation
+                                    # p_Lu is (y,x). Rotated plot x is -p_Lu[0], y is p_Lu[1]
+                                    axes[0].plot([-p_Lu[0], -p_Lv[0]], [p_Lu[1], p_Lv[1]], color='cyan', linewidth=1.5)
+                                    axes[0].plot([-p_Ru[0], -p_Rv[0]], [p_Ru[1], p_Rv[1]], color='cyan', linewidth=1.5)
+                    
+                    # Ensure colorbar is associated with the image, not potentially overwritten by snake plots
+                    if axes[0].images: # Check if an image was plotted
+                        fig.colorbar(axes[0].images[0], ax=axes[0]) 
                     
                     fig.colorbar(axes[0].images[0], ax=axes[0]) # Add colorbar for the image
                     axes[0].axis('off')
