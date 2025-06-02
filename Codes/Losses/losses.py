@@ -43,7 +43,7 @@ class MAELoss(nn.Module):
 
 class SnakeFastLoss(nn.Module):
     def __init__(self, stepsz, alpha, beta, fltrstdev, ndims, nsteps, nsteps_width,
-                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=0.0,
+                 cropsz, dmax, maxedgelen, extgradfac, slow_start, negative_weight=0.5,
                  vis_seed=42, vis_sample_index=0):
         super(SnakeFastLoss, self).__init__()
         self.stepsz = stepsz
@@ -65,7 +65,7 @@ class SnakeFastLoss(nn.Module):
         self.iscuda = False
 
         self.negative_weight = negative_weight
-        self.enhancement_factor = 2.0
+        self.enhancement_factor = 4.0
         
         self.visualize_maps = True
         self.vis_dir = 'snake_visualizations'
@@ -78,7 +78,7 @@ class SnakeFastLoss(nn.Module):
         if torch.cuda.is_available():
             torch.cuda.manual_seed(self.vis_seed)
 
-        self.batch = 0
+        self.printed = -1
 
     def cuda(self):
         super(SnakeFastLoss, self).cuda()
@@ -97,6 +97,7 @@ class SnakeFastLoss(nn.Module):
         gimg *= self.extgradfac
         gimgW *= self.extgradfac
         snake_dmap = []
+        optimized_graphs = [None] * len(lbl_graphs)
 
         for i, lg in enumerate(zip(lbl_graphs, gimg, gimgW)):
             # i is index num
@@ -112,15 +113,17 @@ class SnakeFastLoss(nn.Module):
 
             s = GradImRib(graph=l, crop=crop, stepsz=self.stepsz, alpha=self.alpha,
                         beta=self.beta,dim=self.ndims, gimgV=g, gimgW=gw)
-                    
+
             if self.iscuda: 
                 s.cuda()
             if self.slow_start < epoch:
                 s.optim(self.nsteps, self.nsteps_width)
 
-            dmap = s.render_distance_map_with_widths_cropped(g[1:].shape, self.cropsz, self.dmax, self.maxedgelen)
+            optimized_graphs[i] = s.getGraph()
+
+            dmap = s.render_distance_map_with_widths_cropped(g[0].shape, self.cropsz, self.dmax, self.maxedgelen)
             # make everywhere outside of the snake self.dmax
-            dmap[dmap>0] = self.dmax
+            #dmap[dmap>0] = self.dmax
             snake_dmap.append(dmap)
 
         snake_dm = torch.stack(snake_dmap, 0).unsqueeze(1) 
@@ -131,7 +134,8 @@ class SnakeFastLoss(nn.Module):
             
         self.snake_dm = snake_dm
             
-        if epoch % 10 == 0:
+        if epoch % 10 == 0 and self.printed != epoch:
+            self.printed = epoch
             pred_min, pred_max = pred_dmap.min().item(), pred_dmap.max().item()
             snake_min, snake_max = snake_dm.min().item(), snake_dm.max().item()
             pred_neg_count = (pred_dmap < 0).sum().item()
@@ -158,7 +162,13 @@ class SnakeFastLoss(nn.Module):
             # NEW: Visualize the maps with fixed sample index
             if self.visualize_maps:
                 try:
-                    self.visualize_distance_maps(pred_dmap, snake_dm, epoch, sample_idx=self.vis_sample_index)
+                    graph_to_visualize = None
+                    if self.vis_sample_index < len(optimized_graphs):
+                        graph_to_visualize = optimized_graphs[self.vis_sample_index]
+                    else:
+                        print(f"Warning: vis_sample_index {self.vis_sample_index} is out of bounds for optimized_graphs (len {len(optimized_graphs)}). Visualizing with no graph overlay.")
+                    
+                    self.visualize_distance_maps(pred_dmap, snake_dm, graph_to_visualize, epoch, sample_idx=self.vis_sample_index)
                 except Exception as e:
                     print(f"Warning: Could not create visualization: {str(e)}")
         
@@ -168,14 +178,14 @@ class SnakeFastLoss(nn.Module):
         weighted_squared_diff = squared_diff * (1.0 + negative_mask * self.negative_weight)
         loss = weighted_squared_diff.mean()
 
-        if epoch % 50 == 0:
+        """ if epoch % 50 == 0:
             print(f"Loss: {loss.item():.4f}")
-            print("=" * 50)
+            print("=" * 50) """
         
         self.snake = s
         return loss
 
-    def visualize_distance_maps(self, pred_dmap, snake_dm, epoch, sample_idx=None):
+    def visualize_distance_maps(self, pred_dmap, snake_dm, current_graph, epoch, sample_idx=None):
         """
         Visualize the predicted distance map and snake target map.
         For 3D, shows X, Y, Z minimum intensity projections.
@@ -250,40 +260,52 @@ class SnakeFastLoss(nn.Module):
 
             for i, (data_3d, title_prefix, cmap, cmap_args) in enumerate(datasets):
                 projections = [
-                    (np.min(data_3d, axis=0), "(Y-Z Projection / Min X)"),
+                    (np.min(data_3d, axis=2), "(Y-Z Projection / Min X)"),
                     (np.min(data_3d, axis=1), "(X-Z Projection / Min Y)"),
-                    (np.min(data_3d, axis=2), "(X-Y Projection / Min Z)")
+                    (np.min(data_3d, axis=0), "(X-Y Projection / Min Z)") 
                 ]
                 for j, (slice_data, proj_title) in enumerate(projections):
                     im = axes[i, j].imshow(slice_data.T, cmap=cmap, origin='lower', **cmap_args)
                     axes[i, j].set_title(f"{title_prefix}\n{proj_title}")
                     fig.colorbar(im, ax=axes[i, j], orientation='horizontal', fraction=0.046, pad=0.1)
                     axes[i, j].axis('off')
+
+                    # Plot graph overlay
+                    if current_graph:
+                        for node1_idx, node2_idx in current_graph.edges:
+                            if node1_idx in current_graph.nodes and node2_idx in current_graph.nodes:
+                                pos1 = current_graph.nodes[node1_idx]['pos']
+                                pos2 = current_graph.nodes[node2_idx]['pos']
+                                if j == 0: # Y-Z plane, imshow x-axis=Z, y-axis=Y
+                                    axes[i, j].plot([pos1[2], pos2[2]], [pos1[1], pos2[1]], 'r-', linewidth=1.0)
+                                elif j == 1: # X-Z plane, imshow x-axis=Z, y-axis=X
+                                    axes[i, j].plot([pos1[2], pos2[2]], [pos1[0], pos2[0]], 'r-', linewidth=1.0)
+                                elif j == 2: # X-Y plane, imshow x-axis=Y, y-axis=X
+                                    axes[i, j].plot([pos1[1], pos2[1]], [pos1[0], pos2[0]], 'r-', linewidth=1.0)
             
             pred_binary_3d = (pred_np_3d < 0).astype(np.float32)
             snake_binary_3d = (snake_np_3d < 0).astype(np.float32)
-            binary_datasets = [
-                (pred_binary_3d, f'Predicted Vessels (Negative)\nPixels: {np.sum(pred_binary_3d):.0f} ({100*np.mean(pred_binary_3d):.2f}%)', binary_cmap, {'vmin':0, 'vmax':1}),
-                (snake_binary_3d, f'GT Vessels (Negative)\nPixels: {np.sum(snake_binary_3d):.0f} ({100*np.mean(snake_binary_3d):.2f}%)', binary_cmap, {'vmin':0, 'vmax':1})
+            binary_data_list = [
+                (pred_binary_3d, f'Predicted Vessels (Negative)\nPixels: {np.sum(pred_binary_3d):.0f} ({100*np.mean(pred_binary_3d):.2f}%)'),
+                (snake_binary_3d, f'GT Vessels (Negative)\nPixels: {np.sum(snake_binary_3d):.0f} ({100*np.mean(snake_binary_3d):.2f}%)')
             ]
-
-            for i, (data_3d, title_prefix, cmap, cmap_args) in enumerate(binary_datasets):
-                current_row = i + 2 
-                projections = [
-                    (np.min(data_3d, axis=0), "(Y-Z Projection / Min X)"),
-                    (np.min(data_3d, axis=1), "(X-Z Projection / Min Y)"),
-                    (np.min(data_3d, axis=2), "(X-Y Projection / Min Z)")
+            plot_row = 2 # Initialize plot_row for binary images
+            for data_3d_bin, title_prefix_bin in binary_data_list:
+                # Assuming D,H,W maps to Z,Y,X for data_3d_bin as well
+                projections_bin = [
+                    (np.max(data_3d_bin, axis=2), "(Y-Z Max Proj)"), # Project along X-axis
+                    (np.max(data_3d_bin, axis=1), "(X-Z Max Proj)"), # Project along Y-axis
+                    (np.max(data_3d_bin, axis=0), "(X-Y Max Proj)")  # Project along Z-axis
                 ]
-                for j, (slice_data, proj_title) in enumerate(projections):
-                    axes[current_row, j].imshow(slice_data.T, cmap=cmap, origin='lower', **cmap_args)
-                    axes[current_row, j].set_title(f"{title_prefix}\n{proj_title}")
-                    axes[current_row, j].axis('off')
-
+                for j, (slice_data, proj_title) in enumerate(projections_bin):
+                    axes[plot_row, j].imshow(slice_data.T, cmap=binary_cmap, origin='lower', vmin=0, vmax=1)
+            
+            # Difference Plot
             diff_3d = pred_np_3d - snake_np_3d
             diff_projections = [
-                (np.min(diff_3d, axis=0), "(Y-Z Projection / Min X)"),
-                (np.min(diff_3d, axis=1), "(X-Z Projection / Min Y)"),
-                (np.min(diff_3d, axis=2), "(X-Y Projection / Min Z)")
+                (np.min(diff_3d, axis=2), "(Y-Z Projection / Min X)"), # Project along X-axis
+                (np.min(diff_3d, axis=1), "(X-Z Projection / Min Y)"), # Project along Y-axis
+                (np.min(diff_3d, axis=0), "(X-Y Projection / Min Z)")  # Project along Z-axis
             ]
             diff_title_prefix = f'Difference (Pred - GT)\nMin: {diff_3d.min():.2f}, Max: {diff_3d.max():.2f}'
             for j, (slice_data, proj_title) in enumerate(diff_projections):
@@ -303,10 +325,9 @@ class SnakeFastLoss(nn.Module):
             axes[5, 2].axis('off')
             
             plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-            filename = f"snake_viz_epoch_{epoch}_sample_{sample_idx}_{self.batch}_3D.png"
+            filename = f"snake_viz_epoch_{epoch}_sample_{sample_idx}_3D.png"
             plt.savefig(os.path.join(self.vis_dir, filename), dpi=150)
             plt.close(fig)
-            self.batch += 1
             print(f"Saved 3D visualization to {os.path.join(self.vis_dir, filename)}")
 
         elif self.ndims == 2:
@@ -347,10 +368,22 @@ class SnakeFastLoss(nn.Module):
             im1 = axes[0, 0].imshow(pred_np, cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')
             axes[0, 0].set_title(f'Prediction DM\nMin: {pred_np.min():.2f}, Max: {pred_np.max():.2f}')
             plt.colorbar(im1, ax=axes[0, 0])
-            
+            if current_graph:
+                for node1_idx, node2_idx in current_graph.edges:
+                    if node1_idx in current_graph.nodes and node2_idx in current_graph.nodes:
+                        pos1 = current_graph.nodes[node1_idx]['pos']
+                        pos2 = current_graph.nodes[node2_idx]['pos']
+                        axes[0, 0].plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 'r-', linewidth=1.0)
+
             im2 = axes[0, 1].imshow(snake_np, cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')
             axes[0, 1].set_title(f'Snake DM (GT)\nMin: {snake_np.min():.2f}, Max: {snake_np.max():.2f}')
             plt.colorbar(im2, ax=axes[0, 1])
+            if current_graph:
+                for node1_idx, node2_idx in current_graph.edges:
+                    if node1_idx in current_graph.nodes and node2_idx in current_graph.nodes:
+                        pos1 = current_graph.nodes[node1_idx]['pos']
+                        pos2 = current_graph.nodes[node2_idx]['pos']
+                        axes[0, 1].plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 'r-', linewidth=1.0)
             
             pred_binary = (pred_np < 0).astype(np.float32)
             snake_binary = (snake_np < 0).astype(np.float32)

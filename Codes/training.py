@@ -152,23 +152,42 @@ class TrainingEpoch(object):
                 ]
 
                 for i, (data_vol, title_prefix, cmap) in enumerate(data_to_plot):
-                    slice_x = np.min(data_vol, axis=0)
-                    im_x = axes[i, 0].imshow(slice_x.T, cmap=cmap, origin='lower')
-                    axes[i, 0].set_title(f"{title_prefix} (Y-Z projection)")
-                    fig.colorbar(im_x, ax=axes[i, 0], orientation='horizontal', fraction=0.046, pad=0.04)
-                    axes[i, 0].axis('off')
+                    if title_prefix == "Input Image":
+                        slice_x = np.max(data_vol, axis=0)
+                        im_x = axes[i, 0].imshow(slice_x.T, cmap=cmap, origin='lower')
+                        axes[i, 0].set_title(f"{title_prefix} (Y-Z projection)")
+                        fig.colorbar(im_x, ax=axes[i, 0], orientation='horizontal', fraction=0.046, pad=0.04)
+                        axes[i, 0].axis('off')
 
-                    slice_y = np.min(data_vol, axis=1)
-                    im_y = axes[i, 1].imshow(slice_y.T, cmap=cmap, origin='lower')
-                    axes[i, 1].set_title(f"{title_prefix} (X-Z projection)")
-                    fig.colorbar(im_y, ax=axes[i, 1], orientation='horizontal', fraction=0.046, pad=0.04)
-                    axes[i, 1].axis('off')
+                        slice_y = np.max(data_vol, axis=1)
+                        im_y = axes[i, 1].imshow(slice_y.T, cmap=cmap, origin='lower')
+                        axes[i, 1].set_title(f"{title_prefix} (X-Z projection)")
+                        fig.colorbar(im_y, ax=axes[i, 1], orientation='horizontal', fraction=0.046, pad=0.04)
+                        axes[i, 1].axis('off')
 
-                    slice_z = np.min(data_vol, axis=2)
-                    im_z = axes[i, 2].imshow(slice_z.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Y
-                    axes[i, 2].set_title(f"{title_prefix} (X-Y projection)")
-                    fig.colorbar(im_z, ax=axes[i, 2], orientation='horizontal', fraction=0.046, pad=0.04)
-                    axes[i, 2].axis('off')
+                        slice_z = np.max(data_vol, axis=2)
+                        im_z = axes[i, 2].imshow(slice_z.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Y
+                        axes[i, 2].set_title(f"{title_prefix} (X-Y projection)")
+                        fig.colorbar(im_z, ax=axes[i, 2], orientation='horizontal', fraction=0.046, pad=0.04)
+                        axes[i, 2].axis('off')
+                    else:
+                        slice_x = np.min(data_vol, axis=0)
+                        im_x = axes[i, 0].imshow(slice_x.T, cmap=cmap, origin='lower')
+                        axes[i, 0].set_title(f"{title_prefix} (Y-Z projection)")
+                        fig.colorbar(im_x, ax=axes[i, 0], orientation='horizontal', fraction=0.046, pad=0.04)
+                        axes[i, 0].axis('off')
+
+                        slice_y = np.min(data_vol, axis=1)
+                        im_y = axes[i, 1].imshow(slice_y.T, cmap=cmap, origin='lower')
+                        axes[i, 1].set_title(f"{title_prefix} (X-Z projection)")
+                        fig.colorbar(im_y, ax=axes[i, 1], orientation='horizontal', fraction=0.046, pad=0.04)
+                        axes[i, 1].axis('off')
+
+                        slice_z = np.min(data_vol, axis=2)
+                        im_z = axes[i, 2].imshow(slice_z.T, cmap=cmap, origin='lower') # Transpose for consistent view with X,Y
+                        axes[i, 2].set_title(f"{title_prefix} (X-Y projection)")
+                        fig.colorbar(im_z, ax=axes[i, 2], orientation='horizontal', fraction=0.046, pad=0.04)
+                        axes[i, 2].axis('off')
                 
                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
                 
@@ -178,37 +197,7 @@ class TrainingEpoch(object):
                 logger.info(f"Saved visualization to {plot_filename}")
 
         return {"loss": float(mean_loss/len(self.dataloader))}
-
-def show_slices(distance_map, graph):
-    """Show orthogonal slices through the distance map"""
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
-    xx = np.min(distance_map, axis=0)
-    yy = np.min(distance_map, axis=1)
-    zz = np.min(distance_map, axis=2)
-    
-    im0 = axes[0].imshow(xx.T, cmap='coolwarm')
-    axes[0].set_title('Slice (X)')
-    fig.colorbar(im0, ax=axes[0])
-    
-    im1 = axes[1].imshow(yy.T, cmap='coolwarm')
-    axes[1].set_title('Slice (Y)')
-    fig.colorbar(im1, ax=axes[1])
-    
-    im2 = axes[2].imshow(zz.T, cmap='coolwarm')
-    axes[2].set_title('Slice (Z)')
-    fig.colorbar(im2, ax=axes[2])
-
-    for edge in graph.edges:
-        node1, node2 = edge
-        x1, y1, z1 = graph.nodes[node1]['pos']
-        x2, y2, z2 = graph.nodes[node2]['pos']
-        
-        axes[0].plot([y1, y2], [z1, z2], 'r-')
-        axes[1].plot([x1, x2], [z1, z2], 'r-')
-        axes[2].plot([x1, x2], [y1, y2], 'r-')
-    
-    plt.show() 
     
 class Validation(object):
 
@@ -257,7 +246,7 @@ class Validation(object):
                 
                 preds_collector.append(pred_np_item)
                 
-                pred_mask_item = skeletonize_3d((pred_np_item[0] < 5))//255
+                pred_mask_item = skeletonize_3d((pred_np_item[0] < 0))//255
                 label_object_mask_item = (label_np_item[0] == 0)
                 label_skeleton_item = skeletonize_3d(label_object_mask_item)//255
 
@@ -279,20 +268,45 @@ class Validation(object):
                 projection_titles = ["(Y-Z Projection)", "(X-Z Projection)", "(X-Y Projection)"]
                 projection_axes = [0, 1, 2]
 
-                for row_idx, (data_vol, title_prefix, cmap, skeleton_vol) in enumerate(plot_data_config):
+                for row_idx, (data_vol_original, title_prefix, cmap, _original_skeleton_for_this_row) in enumerate(plot_data_config):
+                    
+                    current_data_to_project = data_vol_original
+                    if title_prefix == "Input Image":
+                        min_val = np.min(data_vol_original)
+                        max_val = np.max(data_vol_original)
+                        if max_val > min_val: # Avoid division by zero for constant images
+                            current_data_to_project = (data_vol_original - min_val) / (max_val - min_val)
+
                     for col_idx, proj_axis in enumerate(projection_axes):
                         ax = axes[row_idx, col_idx]
                         
-                        slice_proj = np.min(data_vol, axis=proj_axis)
+                        if title_prefix == "Input Image":
+                            slice_proj = np.max(current_data_to_project, axis=proj_axis)    
+                        else:
+                            slice_proj = np.min(current_data_to_project, axis=proj_axis)
+
                         im = ax.imshow(slice_proj.T, cmap=cmap, origin='lower', aspect='auto')
                         
-                        plot_title = f"{title_prefix} {projection_titles[col_idx]}"
-                        if skeleton_vol is not None:
-                            skeleton_slice_proj = np.max(skeleton_vol, axis=proj_axis) 
-                            ax.contour(skeleton_slice_proj.T, colors='red', linewidths=0.8, levels=[0.5], origin='lower')
-                            plot_title += " + Skel"
+                        current_plot_title = f"{title_prefix} {projection_titles[col_idx]}"
 
-                        ax.set_title(plot_title, fontsize=10)
+                        if title_prefix == "Label":
+                            if label_skeleton_item is not None:
+                                label_skeleton_slice_proj = np.max(label_skeleton_item, axis=proj_axis) 
+                                ax.contour(label_skeleton_slice_proj.T, colors='lime', linewidths=0.8, levels=[0.5], origin='lower')
+                                current_plot_title += " + GT Skel (Lime)"
+                            if pred_mask_item is not None:
+                                pred_skeleton_slice_proj = np.max(pred_mask_item, axis=proj_axis)
+                                ax.contour(pred_skeleton_slice_proj.T, colors='magenta', linewidths=0.8, levels=[0.5], origin='lower', linestyles='--')
+                                current_plot_title += " + Pred Skel (Magenta, Dashed)"
+                        elif title_prefix == "Prediction":
+                            if pred_mask_item is not None:
+                                pred_skeleton_slice_proj = np.max(pred_mask_item, axis=proj_axis) 
+                                ax.contour(pred_skeleton_slice_proj.T, colors='magenta', linewidths=0.8, levels=[0.5], origin='lower')
+                                current_plot_title += " + Pred Skel (Magenta)"
+                        elif title_prefix == "Input Image":
+                            pass
+
+                        ax.set_title(current_plot_title, fontsize=9) # Adjusted fontsize
                         ax.axis('off')
                         fig.colorbar(im, ax=ax, orientation='horizontal', fraction=0.046, pad=0.08)
 
