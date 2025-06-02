@@ -98,7 +98,7 @@ class TrainingEpoch(object):
     def __call__(self, iterations, network, optimizer, lr_scheduler, base_loss, our_loss):
         
         mean_loss = 0
-        for images, labels, masks, graphs, slices in self.dataloader:
+        for idx, (images, labels, masks, graphs, slices) in enumerate(self.dataloader):
 
             images = images.cuda()
             labels = labels.cuda()
@@ -108,16 +108,22 @@ class TrainingEpoch(object):
             # apply the mask. might create confusion for the unet
             #binary_mask = (masks == 0).float() 
             #preds = preds * binary_mask
+            snake = None
+            if self.ours and iterations >= self.ours_start:
+            # calls forward on loss here, and snake is adjusted
+                loss, snake = our_loss(preds, graphs, slices, iterations)
+            else:
+                loss = base_loss(preds, labels)
 
             if iterations % 50 == 0:
                 # Plot and save the first image, label, and prediction of the first batch
                 try:
-                    img_to_plot = utils.from_torch(images[0]/255.0) # (C, H, W)
+                    img_to_plot_orig = utils.from_torch(images[0]/255.0) # (C, H, W)
                     lbl_to_plot = utils.from_torch(labels[0]) # (C_label, H, W)
                     prd_to_plot = utils.from_torch(preds[0])  # (C_out, H, W)
 
                     # Prepare for plotting (e.g., select first channel, transpose if necessary)
-                    # Assuming single-channel or taking the first channel for plotting
+                    img_to_plot = img_to_plot_orig.copy()
                     if img_to_plot.shape[0] > 1: # More than one channel
                         if img_to_plot.shape[0] == 3: # RGB
                              img_to_plot = img_to_plot.transpose(1, 2, 0) # H, W, C
@@ -132,9 +138,55 @@ class TrainingEpoch(object):
                     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
                     fig.suptitle(f"Epoch {iterations} - Batch")
 
-                    im0 = axes[0].imshow(img_to_plot, cmap='gray')
-                    fig.colorbar(im0, ax=axes[0])
+                    # Plot Input Image (with potential snake overlay)
+                    axes[0].imshow(img_to_plot, cmap='gray' if img_to_plot.ndim == 2 else None)
                     axes[0].set_title("Input Image")
+                    if snake and hasattr(snake, 's') and hasattr(snake, 'w') and \
+                       hasattr(snake, 'h') and hasattr(snake, 'n2i') and \
+                       hasattr(snake, '_compute_normals') and hasattr(snake, 'ndims'):
+                        
+                        axes[0].set_title("Input Image + Snake Overlay")
+                        snake_disp_graph = snake.getGraph() # Gets graph with nodes on CPU
+                        for u, v in snake_disp_graph.edges():
+                            pos_u = snake_disp_graph.nodes[u]['pos']
+                            pos_v = snake_disp_graph.nodes[v]['pos']
+                            # Assuming pos is (y,x) for 2D to match imshow (row,col)
+                            axes[0].plot([pos_u[1], pos_v[1]], [pos_u[0], pos_v[0]], 'magenta', linewidth=1.2)
+
+                        s_cpu = snake.s.detach().cpu()
+                        w_cpu = snake.w.detach().cpu() / 2.0 # half-widths
+                        
+                        current_normals_tuple = snake._compute_normals(snake.s) # snake.s is on device
+                        normals_at_nodes_cpu = None
+                        if snake.ndims == 2:
+                            normals_at_nodes_cpu = current_normals_tuple[0].detach().cpu()
+                        elif snake.ndims == 3: # For 3D, use the first normal component (n1)
+                            normals_at_nodes_cpu = current_normals_tuple[0].detach().cpu()
+
+                        if normals_at_nodes_cpu is not None:
+                            node_to_idx = snake.n2i
+                            for u_node_id, v_node_id in snake.h.edges(): # snake.h is internal graph
+                                if u_node_id in node_to_idx and v_node_id in node_to_idx:
+                                    u_idx = node_to_idx[u_node_id]
+                                    v_idx = node_to_idx[v_node_id]
+
+                                    pos_u_tensor = s_cpu[u_idx]
+                                    pos_v_tensor = s_cpu[v_idx]
+                                    width_u_val = w_cpu[u_idx]
+                                    width_v_val = w_cpu[v_idx]
+                                    normal_u_vec = normals_at_nodes_cpu[u_idx]
+                                    normal_v_vec = normals_at_nodes_cpu[v_idx]
+
+                                    p_Lu = (pos_u_tensor - width_u_val * normal_u_vec).numpy()
+                                    p_Ru = (pos_u_tensor + width_u_val * normal_u_vec).numpy()
+                                    p_Lv = (pos_v_tensor - width_v_val * normal_v_vec).numpy()
+                                    p_Rv = (pos_v_tensor + width_v_val * normal_v_vec).numpy()
+                                    
+                                    # Plot using [1] for x, [0] for y
+                                    axes[0].plot([p_Lu[1], p_Lv[1]], [p_Lu[0], p_Lv[0]], color='cyan', linewidth=1.5)
+                                    axes[0].plot([p_Ru[1], p_Rv[1]], [p_Ru[0], p_Rv[0]], color='cyan', linewidth=1.5)
+                    
+                    fig.colorbar(axes[0].images[0], ax=axes[0]) # Add colorbar for the image
                     axes[0].axis('off')
 
                     # plot ground-truth label
@@ -156,12 +208,6 @@ class TrainingEpoch(object):
                     logger.info(f"Saved visualization to {plot_filename}")
                 except Exception as e:
                     logger.error(f"Error during plotting/saving visualization: {e}")
-                
-            if self.ours and iterations >= self.ours_start:
-            # calls forward on loss here, and snake is adjusted
-                loss = our_loss(preds, graphs, slices, None, iterations)
-            else:
-                loss = base_loss(preds, labels)
                 
             loss_v = float(utils.from_torch(loss))
 
@@ -205,11 +251,13 @@ class Validation(object):
         scores = {"corr":[], "comp":[], "qual":[]}
 
         drive_output_path = "/content/drive/MyDrive/snake_model_outputs"
-        local_output_path = self.output_path
+        local_output_path = "./val_plot/"
         drive_valid_path = os.path.join(drive_output_path, "output_valid")
         local_valid_path = os.path.join(local_output_path, "output_valid")
+        plot_save_path = os.path.join(local_output_path, "plots")
         utils.mkdir(drive_valid_path)
         utils.mkdir(local_valid_path)
+        utils.mkdir(plot_save_path)
 
         network.train(False)
         with utils.torch_no_grad:
@@ -232,14 +280,18 @@ class Validation(object):
                 loss_v = float(utils.from_torch(loss))
                 losses.append(loss_v)
 
+                image_np = utils.from_torch(image)[0] # Get the first image in batch for plotting
                 pred_np = utils.from_torch(pred)[0]
                 preds.append(pred_np)
                 label_np = utils.from_torch(label)[0]
-                
-                pred_mask = skeletonize((pred_np <= 5)[0])//255
-                label_mask = (label_np==0)
 
-                corr, comp, qual = correctness_completeness_quality(pred_mask, label_mask, slack=3)
+                pred_np_for_skeleton = pred_np[0] if pred_np.ndim == 3 else pred_np
+                label_np_for_skeleton = label_np[0] if label_np.ndim == 3 else label_np
+
+                pred_mask_skeleton = skeletonize(pred_np_for_skeleton <= 5) # No division by 255 needed for boolean
+                label_mask_skeleton = (label_np_for_skeleton == 0)
+
+                corr, comp, qual = correctness_completeness_quality(pred_mask_skeleton, label_mask_skeleton, slack=3)
                 
                 scores["corr"].append(corr)
                 scores["comp"].append(comp)
@@ -248,7 +300,7 @@ class Validation(object):
                 # Save input and ground truth (only once)
                 input_filename_local = os.path.join(local_valid_path, "val_input_{:03d}.npy".format(i))
                 if not os.path.exists(input_filename_local):
-                    np.save(input_filename_local, utils.from_torch(image)[0])
+                    np.save(input_filename_local, image_np)
 
                 gt_filename_local = os.path.join(local_valid_path, "val_gt_{:03d}.npy".format(i))
                 if not os.path.exists(gt_filename_local):
@@ -260,14 +312,53 @@ class Validation(object):
                 np.save(drive_pred_filename, pred_np)
                 
                 drive_pred_mask_filename = os.path.join(drive_valid_path, "val_predmask_{:03d}_epoch_{:06d}.npy".format(i, iteration))
-                np.save(drive_pred_mask_filename, pred_mask)
+                np.save(drive_pred_mask_filename, pred_mask_skeleton.astype(np.uint8)) # Save skeleton as uint8
                 
-                # 2. Save to local path (the one you're missing)
+                # 2. Save to local path
                 local_pred_filename = os.path.join(local_valid_path, "val_pred_{:03d}_epoch_{:06d}.npy".format(i, iteration))
                 np.save(local_pred_filename, pred_np)
                 
                 local_pred_mask_filename = os.path.join(local_valid_path, "val_predmask_{:03d}_epoch_{:06d}.npy".format(i, iteration))
-                np.save(local_pred_mask_filename, pred_mask)
+                np.save(local_pred_mask_filename, pred_mask_skeleton.astype(np.uint8)) # Save skeleton as uint8
+
+                # Plotting for the first few validation samples or periodically
+                if i < 3 or iteration % 10 == 0: # Example: plot for first 3 samples or every 10 iterations
+                    try:
+                        # Prepare for plotting (select first channel if multiple, ensure 2D)
+                        img_to_plot = image_np[0] if image_np.ndim == 3 else image_np
+                        lbl_to_plot = label_np[0] if label_np.ndim == 3 else label_np
+                        prd_to_plot = pred_np[0] if pred_np.ndim == 3 else pred_np
+
+                        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+                        fig.suptitle(f"Validation - Iteration {iteration} - Sample {i}")
+
+                        # Plot Input Image
+                        im0 = axes[0].imshow(img_to_plot, cmap='gray')
+                        fig.colorbar(im0, ax=axes[0])
+                        axes[0].set_title("Input Image")
+                        axes[0].axis('off')
+
+                        # Plot Ground Truth Label and its skeleton
+                        im1 = axes[1].imshow(lbl_to_plot, cmap='viridis')
+                        fig.colorbar(im1, ax=axes[1])
+                        axes[1].imshow(label_mask_skeleton, cmap='Reds', alpha=0.5, interpolation='none') # Overlay skeleton
+                        axes[1].set_title("Ground Truth + GT Skel (Red)")
+                        axes[1].axis('off')
+
+                        # Plot Prediction and its skeleton
+                        im2 = axes[2].imshow(prd_to_plot, cmap='viridis')
+                        fig.colorbar(im2, ax=axes[2])
+                        axes[2].imshow(pred_mask_skeleton, cmap='Blues', alpha=0.5, interpolation='none') # Overlay skeleton
+                        axes[2].set_title("Prediction + Pred Skel (Blue)")
+                        axes[2].axis('off')
+                        
+                        plt.tight_layout(rect=[0, 0, 1, 0.95])
+                        plot_filename = os.path.join(plot_save_path, f"val_plot_iter_{iteration}_sample_{i}.png")
+                        plt.savefig(plot_filename)
+                        plt.close(fig)
+                        logger.info(f"Saved validation plot to {plot_filename}")
+                    except Exception as e:
+                        logger.error(f"Error during validation plotting: {e}")
 
         scores["qual"] = np.nan_to_num(scores["qual"])
         

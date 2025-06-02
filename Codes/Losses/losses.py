@@ -168,7 +168,7 @@ class SnakeFastLoss(nn.Module):
                     else:
                         print(f"Warning: vis_sample_index {self.vis_sample_index} is out of bounds for optimized_graphs (len {len(optimized_graphs)}). Visualizing with no graph overlay.")
                     
-                    self.visualize_distance_maps(pred_dmap, snake_dm, graph_to_visualize, epoch, sample_idx=self.vis_sample_index)
+                    #self.visualize_distance_maps(pred_dmap, snake_dm, graph_to_visualize, epoch, sample_idx=self.vis_sample_index)
                 except Exception as e:
                     print(f"Warning: Could not create visualization: {str(e)}")
         
@@ -183,7 +183,7 @@ class SnakeFastLoss(nn.Module):
             print("=" * 50) """
         
         self.snake = s
-        return loss
+        return loss, s
 
     def visualize_distance_maps(self, pred_dmap, snake_dm, current_graph, epoch, sample_idx=None):
         """
@@ -373,7 +373,7 @@ class SnakeFastLoss(nn.Module):
                     if node1_idx in current_graph.nodes and node2_idx in current_graph.nodes:
                         pos1 = current_graph.nodes[node1_idx]['pos']
                         pos2 = current_graph.nodes[node2_idx]['pos']
-                        axes[0, 0].plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 'r-', linewidth=1.0)
+                        axes[0, 0].plot([pos1[1], pos2[1]], [pos1[0], pos2[0]], 'r-', linewidth=1.0)
 
             im2 = axes[0, 1].imshow(snake_np, cmap=cmap, vmin=vmin, vmax=vmax, origin='lower')
             axes[0, 1].set_title(f'Snake DM (GT)\nMin: {snake_np.min():.2f}, Max: {snake_np.max():.2f}')
@@ -383,7 +383,7 @@ class SnakeFastLoss(nn.Module):
                     if node1_idx in current_graph.nodes and node2_idx in current_graph.nodes:
                         pos1 = current_graph.nodes[node1_idx]['pos']
                         pos2 = current_graph.nodes[node2_idx]['pos']
-                        axes[0, 1].plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 'r-', linewidth=1.0)
+                        axes[0, 1].plot([pos1[1], pos2[1]], [pos1[0], pos2[0]], 'r-', linewidth=1.0)
             
             pred_binary = (pred_np < 0).astype(np.float32)
             snake_binary = (snake_np < 0).astype(np.float32)
